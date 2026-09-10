@@ -1,0 +1,97 @@
+const UserModel = require('../models/User');
+const { inMemoryStore, isPgConnected, pool } = require('../db');
+
+class RoleController {
+  // Получить список всех доступных ролей
+  static async getRoles(req, res) {
+    try {
+      if (isPgConnected() && pool) {
+        const result = await pool.query('SELECT * FROM roles ORDER BY id ASC');
+        return res.status(200).json({ status: 'success', roles: result.rows });
+      }
+      return res.status(200).json({ status: 'success', roles: inMemoryStore.roles });
+    } catch (error) {
+      return res.status(500).json({ status: 'error', error: error.message });
+    }
+  }
+
+  // Получить список всех пользователей системы с их ролями
+  static async getUsers(req, res) {
+    try {
+      const users = await UserModel.getAllUsers();
+      return res.status(200).json({ status: 'success', users });
+    } catch (error) {
+      return res.status(500).json({ status: 'error', error: error.message });
+    }
+  }
+
+  // Создать нового оператора/пользователя (только для админа/суперадмина)
+  static async createUser(req, res) {
+    try {
+      const { username, password, fullName, role } = req.body;
+      if (!username || !password) {
+        return res.status(400).json({ status: 'fail', error: 'Логин и пароль обязательны' });
+      }
+
+      const existing = await UserModel.findByUsername(username);
+      if (existing) {
+        return res.status(400).json({ status: 'fail', error: 'Пользователь с таким логином уже существует' });
+      }
+
+      const validRoles = ['super_admin', 'admin', 'manager', 'operator', 'viewer'];
+      const targetRole = validRoles.includes(role) ? role : 'operator';
+
+      const newUser = await UserModel.create({
+        username,
+        password,
+        fullName,
+        role: targetRole
+      });
+
+      return res.status(201).json({
+        status: 'success',
+        message: 'Пользователь успешно создан',
+        user: newUser
+      });
+    } catch (error) {
+      return res.status(500).json({ status: 'error', error: error.message });
+    }
+  }
+
+  // Изменить роль пользователя (только для super_admin и admin)
+  static async assignRole(req, res) {
+    try {
+      const { userId } = req.params;
+      const { role } = req.body;
+
+      const validRoles = ['super_admin', 'admin', 'manager', 'operator', 'viewer'];
+      if (!validRoles.includes(role)) {
+        return res.status(400).json({
+          status: 'fail',
+          error: `Недопустимая роль. Возможные варианты: ${validRoles.join(', ')}`
+        });
+      }
+
+      // Нельзя понизить супер-админа обычному админу
+      const targetUser = await UserModel.findById(userId);
+      if (!targetUser) {
+        return res.status(404).json({ status: 'fail', error: 'Пользователь не найден' });
+      }
+
+      if (targetUser.role === 'super_admin' && req.user.role !== 'super_admin') {
+        return res.status(403).json({ status: 'fail', error: 'Только Главный администратор может менять роль super_admin' });
+      }
+
+      const updated = await UserModel.updateUserRole(userId, role);
+      return res.status(200).json({
+        status: 'success',
+        message: `Роль пользователя ${targetUser.username} успешно обновлена на ${role}`,
+        user: updated
+      });
+    } catch (error) {
+      return res.status(500).json({ status: 'error', error: error.message });
+    }
+  }
+}
+
+module.exports = RoleController;
