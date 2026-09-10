@@ -1,6 +1,47 @@
 const { Telegraf, Markup } = require('telegraf');
 const config = require('../config');
 const UserModel = require('../models/User');
+const { calculateDashboardMetrics } = require('../services/googleSheets');
+
+/**
+ * Форматирует число: 0 → '—'
+ */
+function fmt(val) {
+  if (val === undefined || val === null || val === '—') return '—';
+  return val;
+}
+
+/**
+ * Получить краткую сводку из Google Sheets (с кэшом ~3 мин)
+ */
+async function getLiveSummary() {
+  try {
+    const metrics = await calculateDashboardMetrics({});
+    const calls = fmt(metrics.callsCount?.value);
+    const sms = fmt(metrics.smsSentVerification?.value);
+    const registered = fmt(metrics.registeredMainBase?.value);
+    const fromSupport = fmt(metrics.registeredFromSupport?.value);
+    const declined = fmt(metrics.declinedCount?.value);
+    const notCompleted = fmt(metrics.notCompletedCount?.value);
+
+    return {
+      calls,
+      sms,
+      registered,
+      fromSupport,
+      declined,
+      notCompleted,
+      errors: {
+        calls: metrics.callsCount?.error,
+        sms: metrics.smsSentVerification?.error,
+        registered: metrics.registeredMainBase?.error,
+      }
+    };
+  } catch (err) {
+    console.error('[Bot] Ошибка получения метрик Google Sheets:', err.message);
+    return null;
+  }
+}
 
 function initTelegramBot() {
   if (!config.telegram.botToken) {
@@ -10,12 +51,13 @@ function initTelegramBot() {
 
   const bot = new Telegraf(config.telegram.botToken);
 
-  // Обработка команды /start
+  // =========================================
+  // /start — Приветствие и проверка привязки
+  // =========================================
   bot.start(async (ctx) => {
     const tgUser = ctx.from;
     const tgId = String(tgUser.id);
 
-    // Проверяем, привязан ли этот telegram_id к пользователю в системе
     const systemUser = await UserModel.findByTelegramId(tgId);
 
     if (systemUser) {
@@ -23,7 +65,7 @@ function initTelegramBot() {
         `👋 Добро пожаловать, *${systemUser.full_name || systemUser.username}*!\n\n` +
         `✅ Ваша учетная запись верифицирована.\n` +
         `🛡 Ваша роль в системе: *${systemUser.role.toUpperCase()}*\n` +
-        `📊 Вы подключены к дашборду HURMO UZ.\n\n` +
+        `📊 Вы подключены к дашборду *HURMO UZ*.\n\n` +
         `Выберите нужное действие в меню ниже:`,
         {
           parse_mode: 'Markdown',
@@ -46,7 +88,9 @@ function initTelegramBot() {
     );
   });
 
-  // Привязка аккаунта через бота: /link <username> <password>
+  // =========================================
+  // /link <username> <password> — Привязка аккаунта
+  // =========================================
   bot.command('link', async (ctx) => {
     try {
       const parts = ctx.message.text.split(' ');
@@ -68,12 +112,11 @@ function initTelegramBot() {
         return ctx.reply('❌ Неверный пароль доступа.');
       }
 
-      // Привязываем Telegram ID
       await UserModel.linkTelegramId(user.username, tgId);
 
       return ctx.reply(
         `🎉 Успешно! Аккаунт *${user.username}* привязан к вашему Telegram!\n` +
-        `🛡 Роль: *${user.role}*\n` +
+        `🛡 Роль: *${user.role}*\n\n` +
         `Теперь вам доступны функции мониторинга и отчетов.`,
         {
           parse_mode: 'Markdown',
@@ -89,7 +132,111 @@ function initTelegramBot() {
     }
   });
 
-  // Кнопка: Мой профиль
+  // =========================================
+  // /stats — Быстрый отчет с реальными данными
+  // =========================================
+  bot.command('stats', async (ctx) => {
+    const tgId = String(ctx.from.id);
+    const user = await UserModel.findByTelegramId(tgId);
+    if (!user) {
+      return ctx.reply('🔒 Требуется авторизация. Привяжите аккаунт через `/link`.', { parse_mode: 'Markdown' });
+    }
+
+    await ctx.reply('⏳ Загружаю данные из Google Sheets...');
+
+    const data = await getLiveSummary();
+    if (!data) {
+      return ctx.reply('❌ Ошибка получения данных. Проверьте настройки Google Sheets.');
+    }
+
+    const today = new Date().toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
+
+    return ctx.reply(
+      `📊 *Оперативная сводка HURMO UZ*\n` +
+      `📅 _Все данные (без фильтра по дате)_\n` +
+      `🕐 ${today}\n\n` +
+      `📞 *Всего звонков:* ${data.calls}\n` +
+      `✉️ *SMS верификация:* ${data.sms}\n` +
+      `✅ *Зарег. в базе (main_base):* ${data.registered}\n` +
+      `👥 *Зарег. после поддержки:* ${data.fromSupport}\n` +
+      `❌ *Отказов / нет времени:* ${data.declined}\n` +
+      `⏳ *Не завершили регистрацию:* ${data.notCompleted}\n\n` +
+      `🌐 Полный дашборд: ${config.clientUrl}`,
+      { parse_mode: 'Markdown' }
+    );
+  });
+
+  // =========================================
+  // Кнопка: 📊 Сводка дашборда
+  // =========================================
+  bot.hears('📊 Сводка дашборда', async (ctx) => {
+    const tgId = String(ctx.from.id);
+    const user = await UserModel.findByTelegramId(tgId);
+    if (!user) {
+      return ctx.reply('🔒 Требуется авторизация. Привяжите аккаунт через команду `/link`.', { parse_mode: 'Markdown' });
+    }
+
+    await ctx.reply('⏳ Загружаю актуальные данные из Google Sheets...');
+
+    const data = await getLiveSummary();
+    if (!data) {
+      return ctx.reply('❌ Ошибка соединения с Google Sheets. Попробуйте позже или откройте дашборд.');
+    }
+
+    const today = new Date().toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
+
+    return ctx.reply(
+      `📊 *Оперативная сводка HURMO UZ*\n` +
+      `📅 _${today} • Данные без фильтра дат_\n\n` +
+      `📞 Всего звонков: *${data.calls}*\n` +
+      `✉️ SMS верификация: *${data.sms}*\n` +
+      `✅ Зарег. в базе: *${data.registered}*\n` +
+      `👥 Зарег. после поддержки: *${data.fromSupport}*\n` +
+      `❌ Отказов: *${data.declined}*\n` +
+      `⏳ Не завершили: *${data.notCompleted}*\n\n` +
+      `🌐 Полный дашборд: ${config.clientUrl}`,
+      { parse_mode: 'Markdown' }
+    );
+  });
+
+  // =========================================
+  // Кнопка: 📞 Статистика обзвонов
+  // =========================================
+  bot.hears('📞 Статистика обзвонов', async (ctx) => {
+    const tgId = String(ctx.from.id);
+    const user = await UserModel.findByTelegramId(tgId);
+    if (!user) {
+      return ctx.reply('🔒 Требуется авторизация через `/link`.', { parse_mode: 'Markdown' });
+    }
+
+    await ctx.reply('⏳ Получаю статистику...');
+
+    const data = await getLiveSummary();
+    if (!data) {
+      return ctx.reply('❌ Ошибка получения данных из Google Sheets.');
+    }
+
+    const calls = typeof data.calls === 'number' ? data.calls : 0;
+    const declined = typeof data.declined === 'number' ? data.declined : 0;
+    const wrongPerson = 0; // Не выводится отдельно в кнопке
+    const answered = calls - declined;
+    const declinedPct = calls > 0 ? Math.round((declined / calls) * 100) : 0;
+    const answeredPct = calls > 0 ? Math.round((answered / calls) * 100) : 0;
+
+    return ctx.reply(
+      `📞 *Статистика колл-центра HURMO UZ*\n\n` +
+      `📊 Всего звонков: *${data.calls}*\n` +
+      `✅ Ответили и обработали: *${answered}* (${answeredPct}%)\n` +
+      `❌ Отказов / нет времени: *${declined}* (${declinedPct}%)\n` +
+      `✉️ SMS (ссылка / верификация): *${data.sms}*\n\n` +
+      `⚡️ Данные из Google Sheets в реальном времени`,
+      { parse_mode: 'Markdown' }
+    );
+  });
+
+  // =========================================
+  // Кнопка: 👤 Мой профиль
+  // =========================================
   bot.hears('👤 Мой профиль', async (ctx) => {
     const tgId = String(ctx.from.id);
     const user = await UserModel.findByTelegramId(tgId);
@@ -107,64 +254,49 @@ function initTelegramBot() {
     );
   });
 
-  // Кнопка: Сводка дашборда
-  bot.hears('📊 Сводка дашборда', async (ctx) => {
-    const tgId = String(ctx.from.id);
-    const user = await UserModel.findByTelegramId(tgId);
-    if (!user) {
-      return ctx.reply('🔒 Требуется авторизация. Привяжите аккаунт через команду `/link`.', { parse_mode: 'Markdown' });
-    }
-
-    return ctx.reply(
-      `📊 *Оперативная сводка HURMO UZ*\n\n` +
-      `📈 *База контактов:* 1,500+ активных записей\n` +
-      `📞 *Обзвонов за сегодня:* 142 звонка\n` +
-      `✉️ *Отправлено SMS:* 128 сообщений\n` +
-      `✅ *Успешная регистрация:* 84%\n\n` +
-      `🌐 Ссылка на полный веб-дашборд:\n${config.clientUrl}`,
-      { parse_mode: 'Markdown' }
-    );
-  });
-
-  // Кнопка: Статистика обзвонов
-  bot.hears('📞 Статистика обзвонов', async (ctx) => {
-    const tgId = String(ctx.from.id);
-    const user = await UserModel.findByTelegramId(tgId);
-    if (!user) {
-      return ctx.reply('🔒 Требуется авторизация через `/link`.', { parse_mode: 'Markdown' });
-    }
-
-    return ctx.reply(
-      `📞 *Статистика колл-центра*\n\n` +
-      `• *Отвечено:* 68%\n` +
-      `• *Занято / Сброс:* 19%\n` +
-      `• *Недозвон:* 13%\n` +
-      `⚡️ Все данные в реальном времени синхронизируются с Google Sheets.`,
-      { parse_mode: 'Markdown' }
-    );
-  });
-
-  // Кнопка: Помощь
+  // =========================================
+  // Кнопка: ℹ️ Помощь
+  // =========================================
   bot.hears('ℹ️ Помощь', (ctx) => {
     return ctx.reply(
       `ℹ️ *Справка по HURMO Bot*\n\n` +
       `Команды:\n` +
       `• \`/start\` — Перезапустить бота\n` +
-      `• \`/link <логин> <пароль>\` — Привязать дашборд\n` +
-      `• \`/stats\` — Быстрый отчет\n` +
-      `• \`/ping\` — Проверка здоровья сервера`,
+      `• \`/link <логин> <пароль>\` — Привязать аккаунт дашборда\n` +
+      `• \`/stats\` — Быстрый отчет из Google Sheets\n` +
+      `• \`/ping\` — Проверка состояния сервера\n\n` +
+      `📊 Кнопки:\n` +
+      `• *Сводка дашборда* — Все метрики в реальном времени\n` +
+      `• *Статистика обзвонов* — Колл-центр аналитика\n` +
+      `• *Мой профиль* — Данные аккаунта`,
       { parse_mode: 'Markdown' }
     );
   });
 
-  // Быстрый ping
-  bot.command('ping', (ctx) => ctx.reply('🏓 Pong! Бэкенд и бот HURMO UZ работают штатно.'));
+  // =========================================
+  // /ping — Проверка работоспособности
+  // =========================================
+  bot.command('ping', (ctx) => {
+    const uptime = Math.floor(process.uptime());
+    const hours = Math.floor(uptime / 3600);
+    const mins = Math.floor((uptime % 3600) / 60);
+    return ctx.reply(
+      `🏓 *Pong!*\n\n` +
+      `✅ Сервер HURMO UZ работает штатно\n` +
+      `⏱ Аптайм: *${hours}ч ${mins}м*\n` +
+      `🌐 API: ${config.clientUrl}`,
+      { parse_mode: 'Markdown' }
+    );
+  });
 
-  console.log('🤖 [Telegram Bot] Инициализация бота @HURMO_UZ_NOTIFICATIONS_BOT...');
-  // Запуск polling
+  // =========================================
+  // Запуск бота
+  // =========================================
+  console.log('🤖 [Telegram Bot] Инициализация бота HURMO UZ...');
+
   bot.launch({ dropPendingUpdates: true })
     .then(() => {
-      console.log('🤖 [Telegram Bot] Успешно запущен и слушает входящие сообщения!');
+      console.log('🤖 [Telegram Bot] ✅ Успешно запущен и слушает входящие сообщения!');
     })
     .catch((err) => {
       console.error('⚠️ [Telegram Bot] Ошибка запуска бота:', err.message);
