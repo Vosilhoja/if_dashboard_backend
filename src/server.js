@@ -22,38 +22,53 @@ const app = express();
 // 🛡️ SECURITY & UTILITY MIDDLEWARES
 // ==========================================
 
-// 1. Helmet — защита заголовков HTTP (HSTS, X-Frame-Options, X-Content-Type-Options, etc.)
+// 1. Helmet — защита заголовков HTTP
 app.use(helmet());
 
-// 2. CORS — строгая политика источников (разрешаем Next.js фронтенд)
+// 2. CORS — строгая политика источников (разрешаем Next.js фронтенд на Vercel и локально)
 const allowedOrigins = [
   config.clientUrl,
   'http://localhost:3000',
-  'http://127.0.0.1:3000'
-];
+  'http://127.0.0.1:3000',
+  'https://if-dashboard.vercel.app',
+  'https://if-dashboard-git-main-vosilhoja.vercel.app',
+  'https://if-dashboard-backend.fly.dev'
+].filter(Boolean);
 
 app.use(cors({
   origin: function (origin, callback) {
-    // Разрешаем запросы без origin (например мобильные клиенты или curl) в dev
-    if (!origin || allowedOrigins.indexOf(origin) !== -1 || config.nodeEnv === 'development') {
-      callback(null, true);
-    } else {
-      callback(new Error('Запрос заблокирован политикой CORS'));
+    if (!origin) return callback(null, true);
+    
+    // Check direct matches
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      return callback(null, true);
     }
+
+    // Check dynamic Vercel preview deployments (*.vercel.app)
+    if (/^https:\/\/if-dashboard.*\.vercel\.app$/.test(origin)) {
+      return callback(null, true);
+    }
+
+    if (config.nodeEnv === 'development') {
+      return callback(null, true);
+    }
+
+    console.warn(`[CORS] Blocked request from origin: ${origin}`);
+    callback(new Error('Запрос заблокирован политикой CORS'));
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-access-token']
 }));
 
-// 3. Request Logging (HTTP access logs)
+// 3. Request Logging
 app.use(morgan(config.nodeEnv === 'production' ? 'combined' : 'dev'));
 
-// 4. Body Parsers с лимитом размера payload (защита от memory overflow / DoS)
+// 4. Body Parsers с защитой от больших payload
 app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 
-// 5. Global API Rate Limiter (защита от DDoS и спам-запросов)
+// 5. Global API Rate Limiter
 app.use('/api', apiLimiter);
 
 // ==========================================
@@ -77,7 +92,7 @@ app.use('/api/auth', authRoutes);
 // Модуль Управления Ролями и Пользователями (RBAC)
 app.use('/api/admin', roleRoutes);
 
-// Модуль Данных Дашборда (CRUD + Защита ролями)
+// Модуль Данных Дашборда (Google Sheets Metrics, Period Details, CRUD)
 app.use('/api/data', dataRoutes);
 
 // 404 & Centralized Error Handlers
@@ -99,7 +114,7 @@ async function startServer() {
     await seedDefaultUsers();
 
     // Запуск сервера
-    app.listen(config.port, () => {
+    app.listen(config.port, '0.0.0.0', () => {
       console.log('====================================================');
       console.log(`🚀 [HURMO Backend] Сервер успешно запущен на порту: ${config.port}`);
       console.log(`📡 URL API: http://localhost:${config.port}`);

@@ -1,11 +1,23 @@
 require('dotenv').config();
 
+// Ensure required environment variables exist without unsafe fallbacks
+function requireEnv(key) {
+  const val = process.env[key];
+  if (!val || val.trim() === '') {
+    throw new Error(`CRITICAL CONFIG ERROR: Required environment variable "${key}" is not set.`);
+  }
+  return val.trim();
+}
+
+const jwtSecret = requireEnv('JWT_SECRET');
+const telegramBotToken = requireEnv('TELEGRAM_BOT_TOKEN');
+
 module.exports = {
   port: parseInt(process.env.PORT, 10) || 5000,
   nodeEnv: process.env.NODE_ENV || 'development',
   clientUrl: process.env.CLIENT_URL || 'http://localhost:3000',
   jwt: {
-    secret: process.env.JWT_SECRET || 'fallback_secret_for_dev_only_change_in_prod_12345',
+    secret: jwtSecret,
     expiresIn: process.env.JWT_EXPIRES_IN || '7d'
   },
   db: {
@@ -18,8 +30,16 @@ module.exports = {
     ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false
   },
   telegram: {
-    botToken: process.env.TELEGRAM_BOT_TOKEN || '8947372834:AAFaBgNc0qNX12PSSPJ-hAuFYwfgLYi6J78',
+    botToken: telegramBotToken,
     adminIds: (process.env.TELEGRAM_ADMIN_IDS || '').split(',').map(id => id.trim()).filter(Boolean)
+  },
+  google: {
+    sheetMain: process.env.GOOGLE_SHEET_MAIN,
+    sheetNumbers: process.env.GOOGLE_SHEET_NUMBERS,
+    sheetEskiz: process.env.GOOGLE_SHEET_ESKIZ,
+    sheetNotCompleted: process.env.GOOGLE_SHEET_NOT_COMPLETED,
+    clientEmail: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
+    privateKey: process.env.GOOGLE_PRIVATE_KEY
   },
   roles: {
     SUPER_ADMIN: 'super_admin',

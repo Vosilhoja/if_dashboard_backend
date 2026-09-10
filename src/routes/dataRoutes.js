@@ -1,76 +1,66 @@
 const express = require('express');
 const router = express.Router();
 const { authenticateToken, authorizeRoles } = require('../middleware/auth');
-
-// Тестовое хранилище данных / записей дашборда
-let dashboardItems = [
-  { id: 1, title: 'Реестр обращений колл-центра', category: 'calls', total: 1540, status: 'active' },
-  { id: 2, title: 'Воронка SMS верификаций', category: 'sms', total: 1280, status: 'synced' },
-  { id: 3, title: 'Региональная база респондентов', category: 'respondents', total: 890, status: 'ready' }
-];
+const {
+  calculateDashboardMetrics,
+  getPeriodDetails,
+  getSheetPaginated
+} = require('../services/googleSheets');
 
 /**
  * GET /api/data
- * Получение списка данных (доступно всем авторизованным пользователям)
+ * Возвращает реальные посчитанные метрики DashboardMetrics из Google Sheets
+ * Query params: startDate, endDate, refresh, anomalyThreshold
  */
-router.get('/', authenticateToken, (req, res) => {
-  res.status(200).json({
-    status: 'success',
-    user: {
-      username: req.user.username,
-      role: req.user.role
-    },
-    count: dashboardItems.length,
-    items: dashboardItems
-  });
+router.get('/', authenticateToken, async (req, res, next) => {
+  try {
+    const { startDate, endDate, refresh, anomalyThreshold } = req.query;
+    const metrics = await calculateDashboardMetrics({
+      startDate,
+      endDate,
+      refresh: refresh === 'true',
+      anomalyThreshold
+    });
+
+    return res.status(200).json(metrics);
+  } catch (error) {
+    next(error);
+  }
 });
 
 /**
- * POST /api/data
- * Добавление новой записи (доступно менеджеру, админу, суперадмину)
+ * GET /api/data/period
+ * Детальная выборка строк звонков и незавершивших регистрацию за период
+ * Query params: start, end (или startDate, endDate)
  */
-router.post('/', authenticateToken, authorizeRoles('manager', 'admin', 'super_admin'), (req, res) => {
-  const { title, category, total } = req.body;
-  if (!title) {
-    return res.status(400).json({ status: 'fail', error: 'Поле title обязательно' });
+router.get('/period', authenticateToken, async (req, res, next) => {
+  try {
+    const startDate = req.query.start || req.query.startDate || '';
+    const endDate = req.query.end || req.query.endDate || '';
+
+    const details = await getPeriodDetails(startDate, endDate);
+    return res.status(200).json(details);
+  } catch (error) {
+    next(error);
   }
-
-  const newItem = {
-    id: dashboardItems.length + 1,
-    title,
-    category: category || 'general',
-    total: Number(total) || 0,
-    status: 'new',
-    createdAt: new Date()
-  };
-
-  dashboardItems.push(newItem);
-
-  res.status(201).json({
-    status: 'success',
-    message: 'Запись успешно создана',
-    item: newItem
-  });
 });
 
 /**
- * DELETE /api/data/:id
- * Удаление записи (доступно только admin и super_admin)
+ * GET /api/data/sheets/:type
+ * Пагинация и поиск по сырым таблицам (main, numbers, eskiz, not_completed)
  */
-router.delete('/:id', authenticateToken, authorizeRoles('admin', 'super_admin'), (req, res) => {
-  const id = Number(req.params.id);
-  const index = dashboardItems.findIndex(item => item.id === id);
+router.get('/sheets/:type', authenticateToken, async (req, res, next) => {
+  try {
+    const { type } = req.params;
+    const page = Math.max(1, parseInt(req.query.page || '1', 10));
+    const pageSize = Math.min(500, Math.max(10, parseInt(req.query.pageSize || '25', 10)));
+    const search = (req.query.search || '').trim();
 
-  if (index === -1) {
-    return res.status(404).json({ status: 'fail', error: 'Запись не найдена' });
+    const data = await getSheetPaginated(type, page, pageSize, search);
+    return res.status(200).json(data);
+  } catch (error) {
+    next(error);
   }
-
-  const deleted = dashboardItems.splice(index, 1);
-  res.status(200).json({
-    status: 'success',
-    message: `Запись с id ${id} удалена`,
-    item: deleted[0]
-  });
 });
 
 module.exports = router;
