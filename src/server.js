@@ -12,6 +12,7 @@ const { notFoundHandler, errorHandler } = require('./middleware/errorHandler');
 const authRoutes = require('./routes/authRoutes');
 const roleRoutes = require('./routes/roleRoutes');
 const dataRoutes = require('./routes/dataRoutes');
+const aiRoutes = require('./routes/aiRoutes');
 
 // Инициализация Telegram Бота
 const { initTelegramBot } = require('./bot/telegramBot');
@@ -35,7 +36,8 @@ const allowedOrigins = [
   'http://127.0.0.1:3000',
   'https://if-dashboard.vercel.app',
   'https://if-dashboard-git-main-vosilhoja.vercel.app',
-  'https://if-dashboard-backend.fly.dev'
+  // Railway backend — self-requests allowed
+  'https://ifdashboardbackend-production.up.railway.app',
 ].filter(Boolean);
 
 app.use(cors({
@@ -97,6 +99,9 @@ app.use('/api/admin', roleRoutes);
 
 // Модуль Данных Дашборда (Google Sheets Metrics, Period Details, CRUD)
 app.use('/api/data', dataRoutes);
+
+// Модуль AI (Gemini) — все вызовы AI API только с бэкенда
+app.use('/api/ai', aiRoutes);
 
 // 404 & Centralized Error Handlers
 app.use(notFoundHandler);

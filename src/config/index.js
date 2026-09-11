@@ -9,7 +9,11 @@ function requireEnv(key) {
   return val.trim();
 }
 
-const jwtSecret = process.env.JWT_SECRET || 'hurmo_super_secure_jwt_secret_key_2026_senior_backend_production_ready';
+// JWT secret is required — no hardcoded fallback allowed in production
+const jwtSecret = process.env.NODE_ENV === 'production'
+  ? requireEnv('JWT_SECRET')
+  : (process.env.JWT_SECRET || 'hurmo_dev_only_jwt_secret_not_for_production');
+
 const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN || '';
 
 module.exports = {
@@ -41,6 +45,8 @@ module.exports = {
     clientEmail: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
     privateKey: process.env.GOOGLE_PRIVATE_KEY
   },
+  // Gemini AI API key — used only on the backend (never exposed to frontend)
+  geminiApiKey: process.env.GEMINI_API_KEY || '',
   roles: {
     SUPER_ADMIN: 'super_admin',
     ADMIN: 'admin',
