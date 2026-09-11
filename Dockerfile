@@ -2,21 +2,19 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-# Копируем зависимости
+# Install production dependencies
 COPY package*.json ./
-
-# Устанавливаем production зависимости
 RUN npm ci --only=production
 
-# Копируем исходный код
+# Copy source code
 COPY . .
 
-# Переменные окружения
+# NODE_ENV should be set via Railway environment variables, not hardcoded here.
+# Railway injects PORT automatically — do NOT hardcode it.
 ENV NODE_ENV=production
-ENV PORT=5000
 
-# Открываем порт
+# Expose a default port for local Docker use only.
+# On Railway, the PORT env var is injected dynamically.
 EXPOSE 5000
 
-# Запуск безопасного сервера
 CMD ["node", "src/server.js"]

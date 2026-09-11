@@ -3,6 +3,10 @@
 .env.local
 .env.production
 
+# Fly.io archived config (superseded by Railway)
+fly.toml.archived
+
+
 # Node modules
 node_modules/
 
