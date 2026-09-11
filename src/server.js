@@ -18,6 +18,9 @@ const { initTelegramBot } = require('./bot/telegramBot');
 
 const app = express();
 
+// Trust reverse proxy (Fly.io, Vercel) for accurate IP detection and rate limiting
+app.set('trust proxy', 1);
+
 // ==========================================
 // 🛡️ SECURITY & UTILITY MIDDLEWARES
 // ==========================================

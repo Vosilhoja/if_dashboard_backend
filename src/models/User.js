@@ -8,7 +8,7 @@ class UserModel {
     if (isPgConnected() && pool) {
       try {
         const res = await pool.query(
-          'SELECT u.*, r.permissions FROM users u LEFT JOIN roles r ON u.role = r.name WHERE LOWER(u.username) = $1',
+          'SELECT u.*, COALESCE(u.permissions, r.permissions, \'[]\'::jsonb) as permissions FROM users u LEFT JOIN roles r ON u.role = r.name WHERE LOWER(u.username) = $1',
           [cleanUsername]
         );
         return res.rows[0] || null;
@@ -23,7 +23,7 @@ class UserModel {
     const roleInfo = inMemoryStore.roles.find(r => r.name === user.role);
     return {
       ...user,
-      permissions: roleInfo ? roleInfo.permissions : []
+      permissions: (user.permissions && user.permissions.length > 0) ? user.permissions : (roleInfo ? roleInfo.permissions : [])
     };
   }
 
@@ -33,7 +33,7 @@ class UserModel {
     if (isPgConnected() && pool) {
       try {
         const res = await pool.query(
-          'SELECT u.id, u.username, u.full_name, u.role, u.is_active, u.telegram_id, u.last_login, u.created_at, r.permissions FROM users u LEFT JOIN roles r ON u.role = r.name WHERE u.id = $1',
+          'SELECT u.id, u.username, u.full_name, u.role, u.is_active, u.telegram_id, u.last_login, u.created_at, COALESCE(u.permissions, r.permissions, \'[]\'::jsonb) as permissions FROM users u LEFT JOIN roles r ON u.role = r.name WHERE u.id = $1',
           [numId]
         );
         return res.rows[0] || null;
@@ -54,7 +54,7 @@ class UserModel {
       telegram_id: user.telegram_id,
       last_login: user.last_login,
       created_at: user.created_at,
-      permissions: roleInfo ? roleInfo.permissions : []
+      permissions: (user.permissions && user.permissions.length > 0) ? user.permissions : (roleInfo ? roleInfo.permissions : [])
     };
   }
 
@@ -77,19 +77,20 @@ class UserModel {
     return user || null;
   }
 
-  // Создание нового пользователя
-  static async create({ username, password, fullName, role = 'viewer', telegramId = null }) {
+  // Создание нового пользователя с поддержкой прав (разрешенных страниц)
+  static async create({ username, password, fullName, role = 'viewer', permissions = [], telegramId = null }) {
     const cleanUsername = String(username).trim().toLowerCase();
     const salt = await bcrypt.genSalt(12);
     const passwordHash = await bcrypt.hash(password, salt);
+    const userPermissions = Array.isArray(permissions) ? permissions : [];
 
     if (isPgConnected() && pool) {
       try {
         const res = await pool.query(
-          `INSERT INTO users (username, password_hash, full_name, role, telegram_id)
-           VALUES ($1, $2, $3, $4, $5)
-           RETURNING id, username, full_name, role, is_active, telegram_id, created_at`,
-          [cleanUsername, passwordHash, fullName || cleanUsername, role, telegramId ? String(telegramId) : null]
+          `INSERT INTO users (username, password_hash, full_name, role, permissions, telegram_id)
+           VALUES ($1, $2, $3, $4, $5::jsonb, $6)
+           RETURNING id, username, full_name, role, permissions, is_active, telegram_id, created_at`,
+          [cleanUsername, passwordHash, fullName || cleanUsername, role, JSON.stringify(userPermissions), telegramId ? String(telegramId) : null]
         );
         return res.rows[0];
       } catch (e) {
@@ -103,6 +104,7 @@ class UserModel {
       password_hash: passwordHash,
       full_name: fullName || cleanUsername,
       role,
+      permissions: userPermissions,
       is_active: true,
       telegram_id: telegramId ? String(telegramId) : null,
       last_login: null,
@@ -114,6 +116,7 @@ class UserModel {
       username: newUser.username,
       full_name: newUser.full_name,
       role: newUser.role,
+      permissions: newUser.permissions,
       is_active: newUser.is_active,
       telegram_id: newUser.telegram_id,
       created_at: newUser.created_at
@@ -163,12 +166,12 @@ class UserModel {
     return null;
   }
 
-  // Список всех пользователей
+  // Список всех пользователей с их правами
   static async getAllUsers() {
     if (isPgConnected() && pool) {
       try {
         const res = await pool.query(
-          'SELECT u.id, u.username, u.full_name, u.role, u.is_active, u.telegram_id, u.last_login, u.created_at FROM users u ORDER BY u.id ASC'
+          'SELECT u.id, u.username, u.full_name, u.role, COALESCE(u.permissions, r.permissions, \'[]\'::jsonb) as permissions, u.is_active, u.telegram_id, u.last_login, u.created_at FROM users u LEFT JOIN roles r ON u.role = r.name ORDER BY u.id ASC'
         );
         return res.rows;
       } catch (e) {
@@ -176,16 +179,20 @@ class UserModel {
       }
     }
 
-    return inMemoryStore.users.map(u => ({
-      id: u.id,
-      username: u.username,
-      full_name: u.full_name,
-      role: u.role,
-      is_active: u.is_active,
-      telegram_id: u.telegram_id,
-      last_login: u.last_login,
-      created_at: u.created_at
-    }));
+    return inMemoryStore.users.map(u => {
+      const roleInfo = inMemoryStore.roles.find(r => r.name === u.role);
+      return {
+        id: u.id,
+        username: u.username,
+        full_name: u.full_name,
+        role: u.role,
+        permissions: (u.permissions && u.permissions.length > 0) ? u.permissions : (roleInfo ? roleInfo.permissions : []),
+        is_active: u.is_active,
+        telegram_id: u.telegram_id,
+        last_login: u.last_login,
+        created_at: u.created_at
+      };
+    });
   }
 
   // Обновление роли пользователя
@@ -210,6 +217,29 @@ class UserModel {
     return null;
   }
 
+  // Обновление прав (разрешенных страниц) пользователя
+  static async updateUserPermissions(userId, permissions) {
+    const userPermissions = Array.isArray(permissions) ? permissions : [];
+    if (isPgConnected() && pool) {
+      try {
+        const res = await pool.query(
+          'UPDATE users SET permissions = $1::jsonb, updated_at = NOW() WHERE id = $2 RETURNING id, username, role, permissions',
+          [JSON.stringify(userPermissions), Number(userId)]
+        );
+        return res.rows[0] || null;
+      } catch (e) {
+        console.error('Ошибка updateUserPermissions в PG:', e.message);
+      }
+    }
+
+    const user = inMemoryStore.users.find(u => u.id === Number(userId));
+    if (user) {
+      user.permissions = userPermissions;
+      return { id: user.id, username: user.username, role: user.role, permissions: user.permissions };
+    }
+    return null;
+  }
+
   // Активация / деактивация пользователя
   static async setUserActive(userId, isActive) {
     if (isPgConnected() && pool) {
@@ -230,6 +260,26 @@ class UserModel {
       return { id: user.id, username: user.username, role: user.role, is_active: user.is_active };
     }
     return null;
+  }
+
+  // Удаление пользователя
+  static async deleteUser(userId) {
+    const numId = Number(userId);
+    if (isPgConnected() && pool) {
+      try {
+        await pool.query('DELETE FROM users WHERE id = $1', [numId]);
+        return true;
+      } catch (e) {
+        console.error('Ошибка deleteUser в PG:', e.message);
+      }
+    }
+
+    const index = inMemoryStore.users.findIndex(u => u.id === numId);
+    if (index !== -1) {
+      inMemoryStore.users.splice(index, 1);
+      return true;
+    }
+    return false;
   }
 
   // Проверка совпадения пароля

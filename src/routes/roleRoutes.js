@@ -21,4 +21,10 @@ router.patch('/users/:userId/role', authorizeRoles('admin', 'super_admin'), Role
 // Активация / деактивация пользователя (только admin, super_admin)
 router.patch('/users/:userId/active', authorizeRoles('admin', 'super_admin'), RoleController.toggleUserActive);
 
+// Обновление прав (разрешенных страниц) пользователя (только admin, super_admin)
+router.patch('/users/:userId/permissions', authorizeRoles('admin', 'super_admin'), RoleController.updatePermissions);
+
+// Удаление пользователя (только admin, super_admin)
+router.delete('/users/:userId', authorizeRoles('admin', 'super_admin'), RoleController.deleteUser);
+
 module.exports = router;

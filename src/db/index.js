@@ -63,12 +63,16 @@ async function initDatabase() {
         password_hash VARCHAR(255) NOT NULL,
         full_name VARCHAR(100),
         role VARCHAR(50) REFERENCES roles(name) ON UPDATE CASCADE ON DELETE RESTRICT DEFAULT 'viewer',
+        permissions JSONB DEFAULT '[]'::jsonb,
         is_active BOOLEAN DEFAULT TRUE,
         telegram_id VARCHAR(50) UNIQUE,
         last_login TIMESTAMP WITH TIME ZONE,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
+
+      -- Ensure permissions column exists if table was already created
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS permissions JSONB DEFAULT '[]'::jsonb;
 
       CREATE TABLE IF NOT EXISTS audit_logs (
         id SERIAL PRIMARY KEY,
