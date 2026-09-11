@@ -13,6 +13,7 @@ const authRoutes = require('./routes/authRoutes');
 const roleRoutes = require('./routes/roleRoutes');
 const dataRoutes = require('./routes/dataRoutes');
 const aiRoutes = require('./routes/aiRoutes');
+const statsRoutes = require('./routes/statsRoutes');
 
 // Инициализация Telegram Бота
 const { initTelegramBot } = require('./bot/telegramBot');
@@ -102,6 +103,9 @@ app.use('/api/data', dataRoutes);
 
 // Модуль AI (Gemini) — все вызовы AI API только с бэкенда
 app.use('/api/ai', aiRoutes);
+
+// Модуль Агрегированной Статистики (Weekly, Monthly, Summary с in-memory кешем)
+app.use('/api/stats', statsRoutes);
 
 // 404 & Centralized Error Handlers
 app.use(notFoundHandler);
