@@ -18,4 +18,7 @@ router.post('/users', authorizeRoles('admin', 'super_admin'), RoleController.cre
 // Назначение роли (только admin, super_admin)
 router.patch('/users/:userId/role', authorizeRoles('admin', 'super_admin'), RoleController.assignRole);
 
+// Активация / деактивация пользователя (только admin, super_admin)
+router.patch('/users/:userId/active', authorizeRoles('admin', 'super_admin'), RoleController.toggleUserActive);
+
 module.exports = router;

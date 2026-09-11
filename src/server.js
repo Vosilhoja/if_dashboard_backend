@@ -131,6 +131,22 @@ async function startServer() {
   }
 }
 
+// ==========================================
+// 🛡️ GLOBAL ERROR HANDLERS (prevent silent crashes)
+// ==========================================
+process.on('uncaughtException', (error) => {
+  console.error('❌ [UNCAUGHT EXCEPTION] Необработанное исключение:', error);
+  console.error('[UNCAUGHT EXCEPTION] Stack:', error.stack);
+  // Give time to log before exit
+  setTimeout(() => process.exit(1), 500);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ [UNHANDLED REJECTION] Необработанное отклонение промиса:', reason);
+  console.error('[UNHANDLED REJECTION] Promise:', promise);
+  // Don't exit — log and continue, some rejections are non-fatal (e.g. DB retry)
+});
+
 // Запуск
 if (require.main === module) {
   startServer();

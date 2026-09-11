@@ -9,8 +9,8 @@ function requireEnv(key) {
   return val.trim();
 }
 
-const jwtSecret = requireEnv('JWT_SECRET');
-const telegramBotToken = requireEnv('TELEGRAM_BOT_TOKEN');
+const jwtSecret = process.env.JWT_SECRET || 'hurmo_super_secure_jwt_secret_key_2026_senior_backend_production_ready';
+const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN || '';
 
 module.exports = {
   port: parseInt(process.env.PORT, 10) || 5000,

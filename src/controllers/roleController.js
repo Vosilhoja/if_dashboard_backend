@@ -92,6 +92,41 @@ class RoleController {
       return res.status(500).json({ status: 'error', error: error.message });
     }
   }
+  // Деактивировать / активировать пользователя (только для super_admin и admin)
+  static async toggleUserActive(req, res) {
+    try {
+      const { userId } = req.params;
+      const { is_active } = req.body;
+
+      if (typeof is_active !== 'boolean') {
+        return res.status(400).json({ status: 'fail', error: 'Поле is_active обязательно (boolean)' });
+      }
+
+      const targetUser = await UserModel.findById(userId);
+      if (!targetUser) {
+        return res.status(404).json({ status: 'fail', error: 'Пользователь не найден' });
+      }
+
+      // Нельзя деактивировать super_admin через admin
+      if (targetUser.role === 'super_admin' && req.user.role !== 'super_admin') {
+        return res.status(403).json({ status: 'fail', error: 'Нельзя изменить статус Главного администратора' });
+      }
+
+      // Нельзя деактивировать самого себя
+      if (targetUser.id === req.user.id) {
+        return res.status(400).json({ status: 'fail', error: 'Нельзя деактивировать собственный аккаунт' });
+      }
+
+      const updated = await UserModel.setUserActive(userId, is_active);
+      return res.status(200).json({
+        status: 'success',
+        message: `Пользователь ${targetUser.username} ${is_active ? 'активирован' : 'деактивирован'}`,
+        user: updated
+      });
+    } catch (error) {
+      return res.status(500).json({ status: 'error', error: error.message });
+    }
+  }
 }
 
 module.exports = RoleController;

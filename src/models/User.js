@@ -210,6 +210,28 @@ class UserModel {
     return null;
   }
 
+  // Активация / деактивация пользователя
+  static async setUserActive(userId, isActive) {
+    if (isPgConnected() && pool) {
+      try {
+        const res = await pool.query(
+          'UPDATE users SET is_active = $1, updated_at = NOW() WHERE id = $2 RETURNING id, username, role, is_active',
+          [isActive, Number(userId)]
+        );
+        return res.rows[0] || null;
+      } catch (e) {
+        console.error('Ошибка setUserActive в PG:', e.message);
+      }
+    }
+
+    const user = inMemoryStore.users.find(u => u.id === Number(userId));
+    if (user) {
+      user.is_active = isActive;
+      return { id: user.id, username: user.username, role: user.role, is_active: user.is_active };
+    }
+    return null;
+  }
+
   // Проверка совпадения пароля
   static async comparePassword(plainPassword, hashedPassword) {
     return bcrypt.compare(plainPassword, hashedPassword);
