@@ -3,40 +3,11 @@
  * Gemini AI integration — all Gemini API calls live here on the backend.
  * The frontend never touches Gemini directly.
  */
-const config = require('../config');
-
-const MODELS_TO_TRY = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+const { generateGeminiContent } = require('../ai/gemini');
 
 async function callGemini(payload, label = 'AI') {
-  const apiKey = config.geminiApiKey;
-  if (!apiKey) {
-    throw Object.assign(new Error('GEMINI_API_KEY not configured on server'), { statusCode: 500 });
-  }
-
-  let lastError = null;
-  for (const model of MODELS_TO_TRY) {
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-    try {
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-
-      if (response.ok) {
-        return await response.json();
-      }
-
-      lastError = await response.json().catch(() => ({}));
-      console.warn(`[${label}] Model ${model} returned HTTP ${response.status}:`, lastError?.error?.message || '');
-    } catch (err) {
-      lastError = err;
-      console.warn(`[${label}] Model ${model} fetch error:`, err.message);
-    }
-  }
-
-  const msg = lastError?.error?.message || (lastError instanceof Error ? lastError.message : 'All models failed');
-  throw Object.assign(new Error(msg), { statusCode: 502 });
+  const { data } = await generateGeminiContent(payload, label);
+  return data;
 }
 
 // ─────────────────────────────────────────────
@@ -64,6 +35,8 @@ const CHAT_SYSTEM_PROMPT = `Ты — встроенный старший дат�
 НАВИГАЦИЯ:
 - [Главная](/overview) | [Воронка](/dashboard) | [BI-аналитика](/analytics) | [Карта](/map) | [Сырые таблицы](/raw) | [Настройки](/settings) | [ИИ-Аналитик](/chat)`;
 
+const { runAIChat } = require('../ai/client');
+
 async function chat(req, res, next) {
   try {
     const { messages, metrics, selectedRegion, period } = req.body || {};
@@ -72,51 +45,18 @@ async function chat(req, res, next) {
       return res.status(400).json({ error: 'История сообщений пуста' });
     }
 
-    // Build context summary from metrics
-    let contextSummary = 'Данные за текущий период не переданы или ещё загружаются.';
-    if (metrics) {
-      const calls    = typeof metrics.callsCount?.value === 'number' ? metrics.callsCount.value : 0;
-      const sms      = typeof metrics.smsSentVerification?.value === 'number' ? metrics.smsSentVerification.value : 0;
-      const reg      = typeof metrics.registeredMainBase?.value === 'number' ? metrics.registeredMainBase.value : 0;
-      const declined = typeof metrics.declinedCount?.value === 'number' ? metrics.declinedCount.value : 0;
-      const callToSmsConv = calls > 0 ? ((sms / calls) * 100).toFixed(1) : '0';
-      const smsToRegConv  = sms  > 0 ? ((reg / sms)  * 100).toFixed(1) : '0';
-      const endToEndConv  = calls > 0 ? ((reg / calls) * 100).toFixed(1) : '0';
+    const { reply, modelUsed } = await runAIChat({
+      messages,
+      metricsContext: metrics,
+      selectedRegion,
+      period,
+    });
 
-      contextSummary = `АКТУАЛЬНЫЕ МЕТРИКИ ДАШБОРДА HURMO UZ:
-- Выбранный период: с ${metrics.period?.startDate || period?.startDate || 'н/д'} по ${metrics.period?.endDate || period?.endDate || 'н/д'}
-${selectedRegion ? `- Географический фильтр: регион "${selectedRegion}"` : '- География: вся территория Узбекистана (14 областей)'}
-ВОРОНКА:
-1. Звонки: ${calls.toLocaleString('ru-RU')}
-2. SMS верификации: ${sms.toLocaleString('ru-RU')} (конверсия из звонка: ${callToSmsConv}%)
-3. Зарегистрировано в main_base: ${reg.toLocaleString('ru-RU')} (конверсия из SMS: ${smsToRegConv}%, сквозная: ${endToEndConv}%)
-- Отказы: ${declined.toLocaleString('ru-RU')} (${calls > 0 ? ((declined / calls) * 100).toFixed(1) : '0'}% от звонков)
-АНОМАЛИИ:
-- Звонки: отклонение ${metrics.anomalyData?.callsAnomaly?.deltaPercent ?? 0}%, статус: ${metrics.anomalyData?.callsAnomaly?.isAnomaly ? 'АНОМАЛИЯ' : 'Норма'}
-- Отказы: отклонение ${metrics.anomalyData?.declinedAnomaly?.deltaPercent ?? 0}%, статус: ${metrics.anomalyData?.declinedAnomaly?.isAnomaly ? 'КРИТИЧЕСКАЯ АНОМАЛИЯ' : 'Норма'}`;
-    }
-
-    const fullSystemPrompt = CHAT_SYSTEM_PROMPT + `\n\nКОНТЕКСТ РЕАЛЬНЫХ ДАННЫХ ПРЯМО СЕЙЧАС:\n${contextSummary}`;
-
-    const serviceContents = messages.map((m) => ({
-      role: m.role === 'assistant' || m.role === 'model' ? 'model' : 'user',
-      parts: [{ text: m.content }],
-    }));
-
-    const data = await callGemini({
-      systemInstruction: { parts: [{ text: fullSystemPrompt }] },
-      contents: serviceContents,
-      generationConfig: { temperature: 0.5, maxOutputTokens: 3000 },
-    }, 'AI Chat');
-
-    const parts = data.candidates?.[0]?.content?.parts || [];
-    const reply = parts.map((p) => p.text || '').join('\n').trim();
-
-    if (!reply) {
-      return res.status(502).json({ error: 'Ответ пуст или сработали ограничения безопасности' });
-    }
-
-    return res.status(200).json({ reply, timestamp: new Date().toISOString() });
+    return res.status(200).json({
+      reply,
+      modelUsed,
+      timestamp: new Date().toISOString(),
+    });
   } catch (err) {
     next(err);
   }

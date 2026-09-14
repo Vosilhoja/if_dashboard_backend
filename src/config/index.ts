@@ -64,8 +64,14 @@ module.exports = {
     clientEmail: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
     privateKey: process.env.GOOGLE_PRIVATE_KEY
   },
-  // Gemini AI API key — used only on the backend (never exposed to frontend)
+  // Gemini keys — primary + failover accounts. Values only from Railway/env.
   geminiApiKey: process.env.GEMINI_API_KEY || '',
+  geminiApiKeys: [
+    process.env.GEMINI_API_KEY,
+    process.env.GEMINI_API_KEY_2,
+    process.env.GEMINI_API_KEY_3,
+    process.env.GEMINI_API_KEY_4,
+  ].map((k) => (k || '').trim()).filter(Boolean),
   roles: {
     SUPER_ADMIN: 'super_admin',
     ADMIN: 'admin',
