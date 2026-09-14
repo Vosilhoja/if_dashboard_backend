@@ -57,6 +57,9 @@ function getSheetId(type) {
     case 'not_completed':
       id = config.google.sheetNotCompleted;
       break;
+    case 'survey_attempts':
+      id = config.google.sheetSurveyAttempts;
+      break;
     default:
       throw new Error(`Неизвестный тип таблицы: "${type}"`);
   }
@@ -147,7 +150,7 @@ function clearSheetCache() {
 }
 
 async function prewarmDataCache() {
-  const types = ['main', 'numbers', 'eskiz', 'not_completed'];
+  const types = ['main', 'numbers', 'eskiz', 'not_completed', 'survey_attempts'];
   const timeoutMs = Number(process.env.DATA_PREWARM_TIMEOUT_MS || 10_000);
   let timeoutId;
   const prewarm = Promise.allSettled(types.map((type) => fetchAllRowsForSheet(type, true)));
@@ -171,7 +174,7 @@ async function prewarmDataCache() {
 
 function startBackgroundDataRefresh() {
   const timer = setInterval(() => {
-    for (const type of ['main', 'numbers', 'eskiz', 'not_completed']) {
+    for (const type of ['main', 'numbers', 'eskiz', 'not_completed', 'survey_attempts']) {
       void refreshSheet(type);
     }
   }, BACKGROUND_REFRESH_MS);
@@ -179,11 +182,157 @@ function startBackgroundDataRefresh() {
   return timer;
 }
 
+const SURVEY_REGION_NAMES = {
+  1: 'Республика Каракалпакстан',
+  2: 'Андижанская область',
+  3: 'Бухарская область',
+  4: 'Джизакская область',
+  5: 'Кашкадарьинская область',
+  6: 'Навоийская область',
+  7: 'Наманганская область',
+  8: 'Самаркандская область',
+  9: 'Сурхандарьинская область',
+  10: 'Сырдарьинская область',
+  11: 'Ташкентская область',
+  12: 'Ферганская область',
+  13: 'Хорезмская область',
+  14: 'г. Ташкент',
+};
+
+function normalizeSurveyRegion(value) {
+  const raw = String(value ?? '').trim();
+  const code = Number(raw);
+  if (Number.isInteger(code) && SURVEY_REGION_NAMES[code]) return SURVEY_REGION_NAMES[code];
+  return raw || 'Не указан';
+}
+
+function surveyWeekStart(year, week) {
+  const date = new Date(Date.UTC(year, 0, 1));
+  date.setUTCDate(date.getUTCDate() + (week - 1) * 7);
+  return date;
+}
+
+function isSurveyColumnInRange(column, startDate, endDate) {
+  const match = String(column).match(/^(20\d{2})_w(\d+)(?:_|$)/i);
+  if (!match || (!startDate && !endDate)) return Boolean(match);
+  const weekDate = match ? surveyWeekStart(Number(match[1]), Number(match[2])) : null;
+  if (!weekDate) return false;
+  return isDateInRange(weekDate, startDate, endDate);
+}
+
+function calculateSurveyAttemptMetrics(
+  rows,
+  startDate,
+  endDate,
+  attemptFilter = '',
+  attemptRegion = 'all',
+  attemptStatus = 'all'
+) {
+  const users = new Map();
+  const columns = rows.length > 0
+    ? Object.keys(rows[0]).filter((key) => /^\d{4}_w\d+(?:_|$)/i.test(key))
+    : [];
+  const selectedColumns = columns.filter((column) => isSurveyColumnInRange(column, startDate, endDate));
+  const normalizedRegionFilter = String(attemptRegion || 'all').trim().toLowerCase();
+  const normalizedStatusFilter = String(attemptStatus || 'all').trim().toLowerCase();
+
+  for (const row of rows) {
+    const phone = normalizePhone(row.Phone || row.phone || row['Телефон']);
+    const id = String(row.id || row.ID || row['ID пользователя'] || '').trim();
+    const identity = phone || id;
+    if (!identity) continue;
+
+    const region = normalizeSurveyRegion(row.Region || row.region || row['Регион']);
+    if (
+      normalizedRegionFilter !== 'all' &&
+      region.toLowerCase() !== normalizedRegionFilter
+    ) {
+      continue;
+    }
+
+    const user = users.get(identity) || { attempts: 0, region, statusCounts: {} };
+    let rowAttempts = 0;
+    for (const column of selectedColumns) {
+      const status = String(row[column] ?? '').trim();
+      if (!status || status.toLowerCase() === 'created') continue;
+      const normalizedStatus = status.toLowerCase();
+      if (
+        normalizedStatusFilter !== 'all' &&
+        normalizedStatus !== normalizedStatusFilter
+      ) {
+        continue;
+      }
+
+      rowAttempts++;
+      user.statusCounts[normalizedStatus] = (user.statusCounts[normalizedStatus] || 0) + 1;
+    }
+
+    if (rowAttempts === 0) continue;
+
+    user.attempts += rowAttempts;
+    if (user.region === 'Не указан' && region !== 'Не указан') user.region = region;
+    users.set(identity, user);
+  }
+
+  const matchesFilter = (attempts) => {
+    if (!attemptFilter || attemptFilter === 'all') return true;
+    if (attemptFilter === '4+') return attempts >= 4;
+    const exact = Number(attemptFilter);
+    return Number.isInteger(exact) && exact > 0 ? attempts === exact : true;
+  };
+
+  const filteredUsers = [...users.values()].filter((user) => matchesFilter(user.attempts));
+  const regionUsers = new Map();
+  for (const user of filteredUsers) {
+    const region = regionUsers.get(user.region) || { people: 0, attempts: 0 };
+    region.people++;
+    region.attempts += user.attempts;
+    regionUsers.set(user.region, region);
+  }
+
+  const distribution = { '1': 0, '2': 0, '3': 0, '4+': 0 };
+  for (const user of filteredUsers) {
+    const bucket = user.attempts >= 4 ? '4+' : String(user.attempts);
+    distribution[bucket] = (distribution[bucket] || 0) + 1;
+  }
+
+  const statusCounts = {};
+  for (const user of filteredUsers) {
+    for (const [status, count] of Object.entries(user.statusCounts || {})) {
+      statusCounts[status] = (statusCounts[status] || 0) + count;
+    }
+  }
+
+  return {
+    people: filteredUsers.length,
+    attempts: filteredUsers.reduce((sum, user) => sum + user.attempts, 0),
+    repeatPeople: filteredUsers.filter((user) => user.attempts > 1).length,
+    distribution,
+    regions: [...regionUsers.entries()]
+      .map(([region, values]) => ({ region, people: values.people, attempts: values.attempts }))
+      .sort((a, b) => b.people - a.people || b.attempts - a.attempts),
+    statuses: Object.entries(statusCounts)
+      .map(([status, count]) => ({ status, count: Number(count) }))
+      .sort((a, b) => b.count - a.count),
+    columns: selectedColumns,
+    selectedRegion: attemptRegion,
+    selectedStatus: attemptStatus,
+  };
+}
+
 /**
  * Расчет всех операционных метрик (интерфейс DashboardMetrics)
  */
 async function calculateDashboardMetrics(query: any = {}) {
-  const { startDate = '', endDate = '', refresh = false, anomalyThreshold: customThreshold } = query;
+  const {
+    startDate = '',
+    endDate = '',
+    refresh = false,
+    anomalyThreshold: customThreshold,
+    attemptFilter = 'all',
+    attemptRegion = 'all',
+    attemptStatus = 'all',
+  } = query;
 
   if (refresh) {
     clearSheetCache();
@@ -193,11 +342,13 @@ async function calculateDashboardMetrics(query: any = {}) {
   let numbersRows = [];
   let eskizRows = [];
   let notCompletedRows = [];
+  let surveyAttemptRows = [];
 
   let mainError = null;
   let numbersError = null;
   let eskizError = null;
   let notCompletedError = null;
+  let surveyAttemptsError = null;
 
   await Promise.all([
     fetchAllRowsForSheet('main', refresh)
@@ -224,7 +375,24 @@ async function calculateDashboardMetrics(query: any = {}) {
         console.error('Ошибка загрузки not_completed:', err.message);
         notCompletedError = err.message || 'Ошибка загрузки not_completed';
       }),
+    fetchAllRowsForSheet('survey_attempts', refresh)
+      .then((res) => { surveyAttemptRows = res; })
+      .catch((err) => {
+        console.error('Ошибка загрузки survey_attempts:', err.message);
+        surveyAttemptsError = err.message || 'Ошибка загрузки survey_attempts';
+      }),
   ]);
+
+  const surveyAttemptDetails = surveyAttemptsError
+    ? null
+    : calculateSurveyAttemptMetrics(
+      surveyAttemptRows,
+      startDate,
+      endDate,
+      attemptFilter,
+      attemptRegion,
+      attemptStatus
+    );
 
   // 1. Быстрый поиск номеров main_base и сбор телефонной диагностики
   const phoneDiagnostics = {
@@ -538,6 +706,24 @@ async function calculateDashboardMetrics(query: any = {}) {
       subtext: notCompletedError ? undefined : `Не завершили регистрацию за период`,
       error: notCompletedError || undefined,
     },
+    surveyAttemptsPeople: {
+      value: surveyAttemptsError ? '—' : surveyAttemptDetails.people,
+      subtext: surveyAttemptsError
+        ? undefined
+        : `Уникальных людей с попыткой; фильтр: ${attemptFilter === 'all' ? 'все' : attemptFilter}`,
+      error: surveyAttemptsError || undefined,
+    },
+    surveyAttemptsTotal: {
+      value: surveyAttemptsError ? '—' : surveyAttemptDetails.attempts,
+      subtext: surveyAttemptsError ? undefined : 'Всего попыток по недельным статусам',
+      error: surveyAttemptsError || undefined,
+    },
+    surveyAttemptsRepeatPeople: {
+      value: surveyAttemptsError ? '—' : surveyAttemptDetails.repeatPeople,
+      subtext: surveyAttemptsError ? undefined : 'Людей с двумя и более попытками',
+      error: surveyAttemptsError || undefined,
+    },
+    surveyAttemptDetails,
     phoneDiagnostics,
     period: {
       startDate,
@@ -548,6 +734,7 @@ async function calculateDashboardMetrics(query: any = {}) {
       numbers: numbersRows.length,
       eskiz: eskizRows.length,
       not_completed: notCompletedRows.length,
+      survey_attempts: surveyAttemptRows.length,
     },
     anomalyData,
     cachedAt: new Date().toISOString(),

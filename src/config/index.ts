@@ -60,6 +60,7 @@ module.exports = {
     sheetNumbers: process.env.GOOGLE_SHEET_NUMBERS,
     sheetEskiz: process.env.GOOGLE_SHEET_ESKIZ,
     sheetNotCompleted: process.env.GOOGLE_SHEET_NOT_COMPLETED,
+    sheetSurveyAttempts: process.env.GOOGLE_SHEET_SURVEY_ATTEMPTS,
     sheetCalls: process.env.GOOGLE_SHEET_CALLS,
     clientEmail: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
     privateKey: process.env.GOOGLE_PRIVATE_KEY

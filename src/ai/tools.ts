@@ -12,6 +12,9 @@ export interface FunnelToolParams {
   startDate?: string;
   endDate?: string;
   anomalyThreshold?: number;
+  attemptFilter?: string;
+  attemptRegion?: string;
+  attemptStatus?: string;
 }
 
 /**
@@ -22,6 +25,9 @@ export async function getFunnelMetrics(params: FunnelToolParams = {}) {
     startDate: params.startDate || '',
     endDate: params.endDate || '',
     anomalyThreshold: params.anomalyThreshold || 30,
+    attemptFilter: params.attemptFilter || 'all',
+    attemptRegion: params.attemptRegion || 'all',
+    attemptStatus: params.attemptStatus || 'all',
   });
 
   const calls = typeof metrics.callsCount?.value === 'number' ? metrics.callsCount.value : 0;
@@ -32,6 +38,8 @@ export async function getFunnelMetrics(params: FunnelToolParams = {}) {
   const declined = typeof metrics.declinedCount?.value === 'number' ? metrics.declinedCount.value : 0;
   const alreadyReg = typeof metrics.alreadyRegisteredCount?.value === 'number' ? metrics.alreadyRegisteredCount.value : 0;
   const notCompleted = typeof metrics.notCompletedCount?.value === 'number' ? metrics.notCompletedCount.value : 0;
+  const surveyPeople = typeof metrics.surveyAttemptsPeople?.value === 'number' ? metrics.surveyAttemptsPeople.value : 0;
+  const surveyAttempts = typeof metrics.surveyAttemptsTotal?.value === 'number' ? metrics.surveyAttemptsTotal.value : 0;
 
   return {
     period: metrics.period,
@@ -44,6 +52,12 @@ export async function getFunnelMetrics(params: FunnelToolParams = {}) {
       declined: declined,
       alreadyRegistered: alreadyReg,
       notCompleted: notCompleted,
+      surveyAttemptsPeople: surveyPeople,
+      surveyAttemptsTotal: surveyAttempts,
+      surveyAttemptsRepeatPeople: typeof metrics.surveyAttemptsRepeatPeople?.value === 'number'
+        ? metrics.surveyAttemptsRepeatPeople.value
+        : 0,
+      surveyAttemptDetails: metrics.surveyAttemptDetails || null,
       conversionCallToSmsPercent: calls > 0 ? Number(((sms / calls) * 100).toFixed(1)) : 0,
       conversionSmsToRegPercent: sms > 0 ? Number(((reg / sms) * 100).toFixed(1)) : 0,
       endToEndConversionPercent: calls > 0 ? Number(((reg / calls) * 100).toFixed(1)) : 0,

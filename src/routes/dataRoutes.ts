@@ -16,12 +16,23 @@ const { getAnalyticsData } = require('../services/analyticsService');
  */
 router.get('/', authenticateToken, async (req, res, next) => {
   try {
-    const { startDate, endDate, refresh, anomalyThreshold } = req.query;
+    const {
+      startDate,
+      endDate,
+      refresh,
+      anomalyThreshold,
+      attemptFilter,
+      attemptRegion,
+      attemptStatus
+    } = req.query;
     const metrics = await calculateDashboardMetrics({
       startDate,
       endDate,
       refresh: refresh === 'true',
-      anomalyThreshold
+      anomalyThreshold,
+      attemptFilter,
+      attemptRegion,
+      attemptStatus
     });
 
     return res.status(200).json(metrics);
@@ -74,6 +85,7 @@ router.get('/settings-info', authenticateToken, (req, res) => {
   const numbersId = config.google.sheetNumbers;
   const eskizId = config.google.sheetEskiz;
   const notCompletedId = config.google.sheetNotCompleted;
+  const surveyAttemptsId = config.google.sheetSurveyAttempts;
 
   const statusSettingsUrl = `https://docs.google.com/spreadsheets/d/${numbersId}#gid=538596832`;
 
@@ -105,6 +117,13 @@ router.get('/settings-info', authenticateToken, (req, res) => {
       title: 'Не завершившие регистрацию',
       url: `https://docs.google.com/spreadsheets/d/${notCompletedId}`,
       sheetId: notCompletedId,
+    },
+    {
+      key: 'survey_attempts',
+      name: 'survey_attempts',
+      title: 'Попытки прохождения опроса',
+      url: `https://docs.google.com/spreadsheets/d/${surveyAttemptsId}`,
+      sheetId: surveyAttemptsId,
     },
   ];
 
