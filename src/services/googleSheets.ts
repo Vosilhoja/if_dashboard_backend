@@ -12,9 +12,11 @@ const {
   isWrongPersonStatus
 } = require('../utils/statusMatcher');
 
-// Cache TTL in ms (3 minutes)
-const CACHE_TTL_MS = 3 * 60 * 1000;
+// Refresh frequently while reusing the same data for concurrent dashboard requests.
+const CACHE_TTL_MS = 30 * 1000;
+const BACKGROUND_REFRESH_MS = 20 * 1000;
 const cache = {};
+const inFlight = {};
 
 function getJwtClient() {
   const email = config.google.clientEmail;
@@ -70,41 +72,71 @@ async function fetchAllRowsForSheet(type, forceRefresh = false) {
   const now = Date.now();
 
   if (!forceRefresh && cache[cacheKey]) {
-    if (now - cache[cacheKey].timestamp < CACHE_TTL_MS) {
+    const age = now - cache[cacheKey].timestamp;
+    if (age < CACHE_TTL_MS) {
       return cache[cacheKey].data;
     }
+
+    // Serve the last complete snapshot immediately and refresh it in the
+    // background. The next page request never waits for Google Sheets.
+    void refreshSheet(type);
+    return cache[cacheKey].data;
   }
 
-  const auth = getJwtClient();
-  const sheetId = getSheetId(type);
-  const doc = new GoogleSpreadsheet(sheetId, auth);
-
-  await doc.loadInfo();
-  let sheet = doc.sheetsByIndex[0];
-  if (type === 'numbers_repeat') {
-    sheet = doc.sheetsByTitle['Повторные'] || doc.sheetsByTitle['повторные'] || doc.sheetsByIndex[1] || sheet;
-  }
-  if (!sheet) {
-    throw new Error(`Лист не найден в документе Google Таблицы для "${type}"`);
-  }
-
-  await sheet.loadHeaderRow().catch(() => {});
-  const rawRows = await sheet.getRows().catch(() => []);
-
-  const data = rawRows.map((row) => {
-    const obj = {};
-    for (const h of sheet.headerValues || []) {
-      obj[h] = row.get(h) ?? '';
+  async function refreshSheet(type) {
+    try {
+      await fetchAllRowsForSheet(type, true);
+    } catch (error) {
+      console.error(`[Data refresh] ${type}:`, error.message || error);
     }
-    return obj;
-  });
+  }
 
-  cache[cacheKey] = {
-    data,
-    timestamp: now,
-  };
+  if (inFlight[cacheKey]) {
+    return inFlight[cacheKey];
+  }
 
-  return data;
+  inFlight[cacheKey] = (async () => {
+    const auth = getJwtClient();
+    const sheetId = getSheetId(type);
+    const doc = new GoogleSpreadsheet(sheetId, auth);
+
+    await doc.loadInfo();
+    let sheet = doc.sheetsByIndex[0];
+    if (type === 'numbers_repeat') {
+      sheet = doc.sheetsByTitle['Повторные'] || doc.sheetsByTitle['повторные'] || doc.sheetsByIndex[1] || sheet;
+    }
+    if (!sheet) {
+      throw new Error(`Лист не найден в документе Google Таблицы для "${type}"`);
+    }
+
+    await sheet.loadHeaderRow();
+    const rawRows = await sheet.getRows();
+
+    const data = rawRows.map((row) => {
+      const obj = {};
+      for (const h of sheet.headerValues || []) {
+        obj[h] = row.get(h) ?? '';
+      }
+      return obj;
+    });
+
+    cache[cacheKey] = { data, timestamp: Date.now() };
+    return data;
+  })();
+
+  try {
+    return await inFlight[cacheKey];
+  } finally {
+    delete inFlight[cacheKey];
+  }
+}
+
+async function refreshSheet(type) {
+  try {
+    await fetchAllRowsForSheet(type, true);
+  } catch (error) {
+    console.error(`[Data refresh] ${type}:`, error.message || error);
+  }
 }
 
 function clearSheetCache() {
@@ -113,10 +145,29 @@ function clearSheetCache() {
   }
 }
 
+async function prewarmDataCache() {
+  const types = ['main', 'numbers', 'eskiz', 'not_completed'];
+  const results = await Promise.allSettled(types.map((type) => fetchAllRowsForSheet(type, true)));
+  const failed = results.filter((result) => result.status === 'rejected');
+  if (failed.length > 0) {
+    console.warn(`[Data prewarm] Не удалось загрузить ${failed.length} таблиц; API повторит запрос при обращении.`);
+  }
+}
+
+function startBackgroundDataRefresh() {
+  const timer = setInterval(() => {
+    for (const type of ['main', 'numbers', 'eskiz', 'not_completed']) {
+      void refreshSheet(type);
+    }
+  }, BACKGROUND_REFRESH_MS);
+  timer.unref?.();
+  return timer;
+}
+
 /**
  * Расчет всех операционных метрик (интерфейс DashboardMetrics)
  */
-async function calculateDashboardMetrics(query = {}) {
+async function calculateDashboardMetrics(query: any = {}) {
   const { startDate = '', endDate = '', refresh = false, anomalyThreshold: customThreshold } = query;
 
   if (refresh) {
@@ -514,8 +565,8 @@ async function getPeriodDetails(startDate = '', endDate = '') {
 /**
  * Пагинация и поиск по сырым таблицам
  */
-async function getSheetPaginated(type, page = 1, pageSize = 25, search = '') {
-  const allRows = await fetchAllRowsForSheet(type);
+async function getSheetPaginated(type, page = 1, pageSize = 25, search = '', forceRefresh = false) {
+  const allRows = await fetchAllRowsForSheet(type, forceRefresh);
   let headers = [];
   if (allRows.length > 0) {
     headers = Object.keys(allRows[0]);
@@ -564,6 +615,8 @@ async function getSheetPaginated(type, page = 1, pageSize = 25, search = '') {
 module.exports = {
   fetchAllRowsForSheet,
   clearSheetCache,
+  prewarmDataCache,
+  startBackgroundDataRefresh,
   calculateDashboardMetrics,
   getPeriodDetails,
   getSheetPaginated

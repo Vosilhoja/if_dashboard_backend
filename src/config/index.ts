@@ -9,10 +9,18 @@ function requireEnv(key) {
   return val.trim();
 }
 
-// JWT secret is required — no hardcoded fallback allowed in production
-const jwtSecret = process.env.NODE_ENV === 'production'
-  ? requireEnv('JWT_SECRET')
-  : (process.env.JWT_SECRET || 'hurmo_dev_only_jwt_secret_not_for_production');
+const jwtSecret = requireEnv('JWT_SECRET');
+if (jwtSecret.length < 32) {
+  throw new Error('CRITICAL CONFIG ERROR: JWT_SECRET must contain at least 32 characters.');
+}
+
+const adminPassword = (process.env.ADMIN_PASSWORD || '').trim();
+if (!adminPassword) {
+  throw new Error('CRITICAL CONFIG ERROR: ADMIN_PASSWORD is not set.');
+}
+if (adminPassword.length < 12) {
+  throw new Error('CRITICAL CONFIG ERROR: ADMIN_PASSWORD must contain at least 12 characters.');
+}
 
 const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN || '';
 
@@ -25,13 +33,17 @@ module.exports = {
     expiresIn: process.env.JWT_EXPIRES_IN || '7d'
   },
   db: {
+    // Railway PostgreSQL is enabled when DATABASE_URL is connected.
     connectionString: process.env.DATABASE_URL,
+    enabled: process.env.DB_ENABLED !== 'false' && Boolean(process.env.DATABASE_URL),
     host: process.env.DB_HOST || 'localhost',
     port: parseInt(process.env.DB_PORT, 10) || 5432,
     user: process.env.DB_USER || 'postgres',
     password: process.env.DB_PASSWORD || 'postgres',
     database: process.env.DB_NAME || 'hurmo_dashboard',
-    ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false
+    ssl: process.env.DB_SSL !== 'false' && Boolean(process.env.DATABASE_URL)
+      ? { rejectUnauthorized: true }
+      : false
   },
   telegram: {
     botToken: telegramBotToken,
@@ -42,6 +54,7 @@ module.exports = {
     sheetNumbers: process.env.GOOGLE_SHEET_NUMBERS,
     sheetEskiz: process.env.GOOGLE_SHEET_ESKIZ,
     sheetNotCompleted: process.env.GOOGLE_SHEET_NOT_COMPLETED,
+    sheetCalls: process.env.GOOGLE_SHEET_CALLS,
     clientEmail: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
     privateKey: process.env.GOOGLE_PRIVATE_KEY
   },
@@ -53,5 +66,12 @@ module.exports = {
     MANAGER: 'manager',
     OPERATOR: 'operator',
     VIEWER: 'viewer'
+  },
+  auth: {
+    storage: process.env.AUTH_STORAGE || (process.env.DATABASE_URL ? 'postgres' : 'memory'),
+    maxUsers: 3,
+    fixedUsers: process.env.FIXED_USERS === 'true',
+    adminUsername: process.env.ADMIN_USERNAME || 'admin',
+    adminPassword
   }
 };

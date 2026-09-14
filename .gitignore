@@ -9,6 +9,7 @@ fly.toml.archived
 
 # Node modules
 node_modules/
+dist/
 
 # Logs
 npm-debug.log*

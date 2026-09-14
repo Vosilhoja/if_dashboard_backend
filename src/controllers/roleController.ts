@@ -1,5 +1,6 @@
 const UserModel = require('../models/User');
 const { inMemoryStore, isPgConnected, pool } = require('../db');
+const config = require('../config');
 
 class RoleController {
   // Получить список всех доступных ролей
@@ -38,7 +39,13 @@ class RoleController {
         return res.status(400).json({ status: 'fail', error: 'Пользователь с таким логином уже существует' });
       }
 
-      const validRoles = ['super_admin', 'admin', 'manager', 'operator', 'viewer'];
+      const validRoles = ['admin', 'manager', 'operator', 'viewer'];
+      if (role === 'super_admin') {
+        return res.status(403).json({
+          status: 'fail',
+          error: 'Нельзя создать второго super_admin'
+        });
+      }
       const targetRole = validRoles.includes(role) ? role : 'operator';
 
       // Если создается пользователь, можно передать массив разрешенных страниц/прав
@@ -135,6 +142,10 @@ class RoleController {
           status: 'fail',
           error: `Недопустимая роль. Возможные варианты: ${validRoles.join(', ')}`
         });
+      }
+
+      if (role === 'super_admin') {
+        return res.status(403).json({ status: 'fail', error: 'Роль super_admin закреплена только за главным администратором' });
       }
 
       // Нельзя понизить супер-админа обычному админу

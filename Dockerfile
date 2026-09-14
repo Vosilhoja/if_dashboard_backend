@@ -2,12 +2,13 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-# Install production dependencies
+# Install dependencies required to compile TypeScript
 COPY package*.json ./
-RUN npm ci --only=production
+RUN npm ci
 
-# Copy source code
 COPY . .
+RUN npm run build
+RUN npm prune --omit=dev
 
 # NODE_ENV should be set via Railway environment variables, not hardcoded here.
 # Railway injects PORT automatically — do NOT hardcode it.
@@ -17,4 +18,4 @@ ENV NODE_ENV=production
 # On Railway, the PORT env var is injected dynamically.
 EXPOSE 5000
 
-CMD ["node", "src/server.js"]
+CMD ["node", "dist/server.js"]

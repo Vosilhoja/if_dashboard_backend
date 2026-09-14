@@ -18,30 +18,34 @@ const inMemoryStore = {
 let pool = null;
 let isPgConnected = false;
 
-try {
-  pool = new Pool({
-    connectionString: config.db.connectionString || undefined,
-    host: config.db.host,
-    port: config.db.port,
-    user: config.db.user,
-    password: config.db.password,
-    database: config.db.database,
-    ssl: config.db.ssl,
-    connectionTimeoutMillis: 3000,
-    idleTimeoutMillis: 30000,
-    max: 10
-  });
+if (config.db.enabled) {
+  try {
+    pool = new Pool({
+      connectionString: config.db.connectionString || undefined,
+      host: config.db.host,
+      port: config.db.port,
+      user: config.db.user,
+      password: config.db.password,
+      database: config.db.database,
+      ssl: config.db.ssl,
+      connectionTimeoutMillis: 3000,
+      idleTimeoutMillis: 30000,
+      max: 10
+    });
 
-  pool.on('error', (err) => {
-    console.error('⚠️ [Database] Неожиданная ошибка PostgreSQL пула:', err.message);
-  });
-} catch (err) {
-  console.warn('⚠️ [Database] Инициализация PostgreSQL пула пропущена:', err.message);
+    pool.on('error', (err) => {
+      console.error('⚠️ [Database] Неожиданная ошибка PostgreSQL пула:', err.message);
+    });
+  } catch (err) {
+    console.warn('⚠️ [Database] Инициализация PostgreSQL пула пропущена:', err.message);
+  }
+} else {
+  console.log('ℹ️ [Database] PostgreSQL отключен. Используется in-memory хранилище трех аккаунтов.');
 }
 
 // Проверка подключения и инициализация таблиц
 async function initDatabase() {
-  if (!pool) return false;
+  if (!config.db.enabled || !pool) return false;
   try {
     const client = await pool.connect();
     console.log('✅ [Database] Успешное подключение к PostgreSQL!');
@@ -98,7 +102,7 @@ async function initDatabase() {
     client.release();
     return true;
   } catch (err) {
-    console.warn('ℹ️ [Database] PostgreSQL сервер недоступен на порту 5432. Активирован Senior In-Memory Driver с полным сохранением безопасности и ролевой модели.');
+    console.warn('ℹ️ [Database] PostgreSQL недоступен. Используется in-memory хранилище аккаунтов.');
     isPgConnected = false;
     return false;
   }

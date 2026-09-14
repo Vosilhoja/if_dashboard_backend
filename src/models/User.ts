@@ -286,6 +286,23 @@ class UserModel {
   static async comparePassword(plainPassword, hashedPassword) {
     return bcrypt.compare(plainPassword, hashedPassword);
   }
+
+  // Обновляет пароль системной учетной записи при изменении ADMIN_PASSWORD.
+  static async updatePassword(id, password) {
+    const passwordHash = await bcrypt.hash(password, 12);
+    const numId = Number(id);
+
+    if (isPgConnected() && pool) {
+      await pool.query(
+        'UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+        [passwordHash, numId]
+      );
+      return;
+    }
+
+    const user = inMemoryStore.users.find((item) => item.id === numId);
+    if (user) user.password_hash = passwordHash;
+  }
 }
 
 module.exports = UserModel;

@@ -1,4 +1,5 @@
 const UserModel = require('../models/User');
+const config = require('../config');
 
 /**
  * Инициализация системных учетных записей по умолчанию
@@ -7,22 +8,10 @@ const UserModel = require('../models/User');
 async function seedDefaultUsers() {
   const defaultAccounts = [
     {
-      username: 'admin',
-      password: process.env.DASHBOARD_PASSWORD || 'hurmo_secure_pass_2026',
+      username: config.auth.adminUsername,
+      password: config.auth.adminPassword,
       fullName: 'Chief Administrator (HURMO)',
       role: 'super_admin'
-    },
-    {
-      username: 'manager_dilshod',
-      password: 'manager_secret_2026',
-      fullName: 'Дилшод (Аналитик / Менеджер)',
-      role: 'manager'
-    },
-    {
-      username: 'operator_aziz',
-      password: 'operator_secret_2026',
-      fullName: 'Азиз (Колл-центр Оператор)',
-      role: 'operator'
     }
   ];
 
@@ -31,6 +20,9 @@ async function seedDefaultUsers() {
     if (!existing) {
       await UserModel.create(account);
       console.log(`👤 [Seed] Создан аккаунт: ${account.username} (Роль: ${account.role})`);
+    } else if (!(await UserModel.comparePassword(account.password, existing.password_hash))) {
+      await UserModel.updatePassword(existing.id, account.password);
+      console.log(`🔐 [Seed] Пароль аккаунта ${account.username} синхронизирован с ADMIN_PASSWORD`);
     }
   }
 }

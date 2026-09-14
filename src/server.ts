@@ -14,9 +14,12 @@ const roleRoutes = require('./routes/roleRoutes');
 const dataRoutes = require('./routes/dataRoutes');
 const aiRoutes = require('./routes/aiRoutes');
 const statsRoutes = require('./routes/statsRoutes');
+const callRoutes = require('./routes/callRoutes');
 
 // Инициализация Telegram Бота
 const { initTelegramBot } = require('./bot/telegramBot');
+const { prewarmDataCache, startBackgroundDataRefresh } = require('./services/googleSheets');
+const { startCallWorker } = require('./services/worker.service');
 
 const app = express();
 
@@ -84,7 +87,7 @@ app.use('/api', apiLimiter);
 // Health Check / Ping
 app.get('/health', (req, res) => {
   res.status(200).json({
-    status: 'success',
+    status: 'OK',
     timestamp: new Date().toISOString(),
     service: 'HURMO UZ Backend API',
     version: '1.0.0',
@@ -100,6 +103,7 @@ app.use('/api/admin', roleRoutes);
 
 // Модуль Данных Дашборда (Google Sheets Metrics, Period Details, CRUD)
 app.use('/api/data', dataRoutes);
+app.use('/api/calls', callRoutes);
 
 // Модуль AI (Gemini) — все вызовы AI API только с бэкенда
 app.use('/api/ai', aiRoutes);
@@ -124,6 +128,12 @@ async function startServer() {
 
     // Наполнение пользователями по умолчанию
     await seedDefaultUsers();
+
+    // Warm the Google Sheets cache before accepting traffic so the first
+    // dashboard render uses ready data instead of waiting on four API calls.
+    await prewarmDataCache();
+    startBackgroundDataRefresh();
+    startCallWorker();
 
     // Запуск сервера
     app.listen(config.port, '0.0.0.0', () => {

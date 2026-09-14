@@ -124,8 +124,9 @@ router.get('/sheets/:type', authenticateToken, async (req, res, next) => {
     const page = Math.max(1, parseInt(req.query.page || '1', 10));
     const pageSize = Math.min(500, Math.max(10, parseInt(req.query.pageSize || '25', 10)));
     const search = (req.query.search || '').trim();
+    const refresh = req.query.refresh === 'true' || req.query.fresh === 'true';
 
-    const data = await getSheetPaginated(type, page, pageSize, search);
+    const data = await getSheetPaginated(type, page, pageSize, search, refresh);
     return res.status(200).json(data);
   } catch (error) {
     next(error);
