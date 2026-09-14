@@ -93,8 +93,8 @@ export async function getPhoneDiagnosticsAndLosses() {
 
   return {
     foreignNumbers: {
-      uniqueForeignNumbers: foreignPhoneSet.size || 681,
-      totalCallsToForeignNumbers: foreignCallsCount || 681,
+      uniqueForeignNumbers: foreignPhoneSet.size,
+      totalCallsToForeignNumbers: foreignCallsCount,
       totalTalkTimeSeconds: foreignTotalTalkTimeSec,
       lostOperatorMinutes: lostMinutes,
       lostOperatorHours: lostHours,
@@ -169,13 +169,13 @@ export async function getNotCompletedRegistrationsStats() {
   }
 
   return {
-    totalNotCompletedUsers: notCompletedRows.length || 4289,
+    totalNotCompletedUsers: notCompletedRows.length,
     languageDistribution: langMap,
     recoveryStrategy: [
       'Шаг 1: Сегментация по языку (uzbek / russian).',
       'Шаг 2: Триггерная SMS через Eskiz с индивидуальной короткой ссылкой-дожимом в течение 24–48 часов после попытки.',
       'Шаг 3: Тестирование формулировки сообщения: «Вы почти завершили регистрацию в HURMO UZ! Осталось подтвердить телефон и пройти 1-й опрос».',
-      'Шаг 4: Контроль повторных заходов и исключение уже зарегистрированных по mainPhoneSet.',
+      'Шаг 4: Контроль повторных заходов и исключение пользователей, уже зарегистрированных в main_base.',
     ],
   };
 }

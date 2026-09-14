@@ -52,12 +52,20 @@ async function generateGeminiContent(payload, label = 'AI') {
 
     for (const model of MODELS_TO_TRY) {
       const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+      let timeout;
       try {
+        const controller = new AbortController();
+        timeout = setTimeout(
+          () => controller.abort(),
+          Number(process.env.AI_REQUEST_TIMEOUT_MS || 45_000)
+        );
         const response = await fetch(endpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
+          signal: controller.signal,
         });
+        clearTimeout(timeout);
 
         if (response.ok) {
           const data = await response.json();
@@ -73,6 +81,7 @@ async function generateGeminiContent(payload, label = 'AI') {
           break;
         }
       } catch (err) {
+        clearTimeout(timeout);
         lastError = err;
         console.warn(`[${label}] ${keyName} / ${model} fetch:`, err.message);
       }

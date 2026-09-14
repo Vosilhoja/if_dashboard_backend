@@ -1,7 +1,7 @@
 const express = require('express');
 const helmet = require('helmet');
 const cors = require('cors');
-const morgan = require('morgan');
+const pinoHttp = require('pino-http');
 const config = require('./config');
 const { initDatabase } = require('./db');
 const { seedDefaultUsers } = require('./db/seed');
@@ -70,8 +70,18 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization', 'x-access-token']
 }));
 
-// 3. Request Logging
-app.use(morgan(config.nodeEnv === 'production' ? 'combined' : 'dev'));
+// 3. Structured request logging with automatic duration and status fields.
+app.use(pinoHttp({
+  level: config.nodeEnv === 'production' ? 'info' : 'silent',
+  redact: {
+    paths: [
+      'req.headers.authorization',
+      'req.headers.cookie',
+      'req.headers["x-access-token"]',
+    ],
+    censor: '[REDACTED]',
+  },
+}));
 
 // 4. Body Parsers с защитой от больших payload
 app.use(express.json({ limit: '10kb' }));

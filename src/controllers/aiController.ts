@@ -44,12 +44,19 @@ async function chat(req, res, next) {
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: 'История сообщений пуста' });
     }
+    if (messages.length > 50) {
+      return res.status(400).json({ error: 'История диалога слишком длинная' });
+    }
 
     const { reply, modelUsed } = await runAIChat({
       messages,
       metricsContext: metrics,
       selectedRegion,
       period,
+      userContext: {
+        username: req.user?.username,
+        role: req.user?.role,
+      },
     });
 
     return res.status(200).json({

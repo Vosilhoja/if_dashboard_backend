@@ -23,6 +23,45 @@ export interface RunChatOptions {
   metricsContext?: any;
   selectedRegion?: string;
   period?: { startDate?: string; endDate?: string };
+  userContext?: { username?: string; role?: string };
+}
+
+const MAX_CHAT_MESSAGES = 24;
+const MAX_MESSAGE_LENGTH = 8_000;
+
+function normalizeChatMessages(messages: ChatMessage[]): ChatMessage[] {
+  const safeMessages = messages
+    .filter((message) => (
+      (message.role === 'user' || message.role === 'assistant') &&
+      typeof message.content === 'string' &&
+      message.content.trim().length > 0
+    ))
+    .map((message) => ({
+      role: message.role,
+      content: message.content.trim().slice(0, MAX_MESSAGE_LENGTH),
+    }))
+    .slice(-MAX_CHAT_MESSAGES);
+
+  // Gemini expects a conversation to begin with a user turn and alternate
+  // naturally. Collapse duplicate turns caused by retries or UI re-sends.
+  while (safeMessages[0]?.role === 'assistant') safeMessages.shift();
+  const normalized: ChatMessage[] = [];
+  for (const message of safeMessages) {
+    const previous = normalized[normalized.length - 1];
+    if (previous?.role === message.role) {
+      previous.content = `${previous.content}\n\n${message.content}`.slice(-MAX_MESSAGE_LENGTH);
+    } else {
+      normalized.push({ ...message });
+    }
+  }
+  return normalized;
+}
+
+async function getDashboardContext(options: RunChatOptions) {
+  if (options.metricsContext && typeof options.metricsContext === 'object') {
+    return options.metricsContext;
+  }
+  return getFunnelMetrics(options.period || {});
 }
 
 /**
@@ -39,10 +78,10 @@ async function generateNativeAnalyticalResponse(userQuestion: string, options: R
 
 В дашборде **HURMO UZ** все расчёты строятся на сопоставлении 4 независимых Google Таблиц:
 
-1. **Звонки поддержки (\`numbers\`):** всего **${funnel.totalDatabaseRows.numbers?.toLocaleString('ru-RU') || '59 873'}** звонков. Операторы вносят комментарии в свободной форме (\`link\`, \`otkaz\`, \`bot bor\`, \`qayta\`).
-2. **SMS шлюз (\`eskiz\`):** всего **${funnel.totalDatabaseRows.eskiz?.toLocaleString('ru-RU') || '7 827'}** SMS. Фиксирует только технически доставленные SMS со статусами \`DELIVERED\` и \`ACCEPTED\`.
-3. **Основная база панели (\`main_base\`):** **${funnel.totalDatabaseRows.main?.toLocaleString('ru-RU') || '33 127'}** подтверждённых респондентов.
-4. **Незавершённые (\`not_completed\`):** **${funnel.totalDatabaseRows.not_completed?.toLocaleString('ru-RU') || '4 289'}** человек, начавших, но не закончивших опрос.
+1. **Звонки поддержки (\`numbers\`):** всего **${funnel.totalDatabaseRows.numbers?.toLocaleString('ru-RU') ?? 'нет данных'}** звонков. Операторы вносят комментарии в свободной форме (\`link\`, \`otkaz\`, \`bot bor\`, \`qayta\`).
+2. **SMS шлюз (\`eskiz\`):** всего **${funnel.totalDatabaseRows.eskiz?.toLocaleString('ru-RU') ?? 'нет данных'}** SMS. Фиксирует только технически доставленные SMS со статусами \`DELIVERED\` и \`ACCEPTED\`.
+3. **Основная база панели (\`main_base\`):** **${funnel.totalDatabaseRows.main?.toLocaleString('ru-RU') ?? 'нет данных'}** подтверждённых респондентов.
+4. **Незавершённые (\`not_completed\`):** **${funnel.totalDatabaseRows.not_completed?.toLocaleString('ru-RU') ?? 'нет данных'}** человек, начавших, но не закончивших опрос.
 
 **Почему цифры могут казаться не сходящимися:**
 * **Разница статусов:** оператор может поставить статус «отправил ссылку», но SMS не дошло абоненту (баланс, блокировка, спам-фильтр оператора Ucell/UMS/Beeline). Именно поэтому соотношение звонок/SMS показывает процент валидной доставки.
@@ -158,14 +197,33 @@ async function generateNativeAnalyticalResponse(userQuestion: string, options: R
  * Основная точка входа для чата ИИ
  */
 export async function runAIChat(options: RunChatOptions): Promise<{ reply: string; modelUsed: string }> {
-  const messages = options.messages || [];
+  const messages = normalizeChatMessages(options.messages || []);
   const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user')?.content || '';
+  if (!lastUserMsg) {
+    throw Object.assign(new Error('Нужно отправить сообщение пользователя'), { statusCode: 400 });
+  }
 
   // 1. Gemini с ротацией ключей (GEMINI_API_KEY … GEMINI_API_KEY_4)
   if (getGeminiApiKeys().length > 0) {
     try {
-      const funnel = await getFunnelMetrics(options.period || {});
-      const systemWithContext = `${HURMO_AI_SYSTEM_PROMPT}\n\nАКТУАЛЬНЫЙ СРЕЗ ДАННЫХ ДАШБОРДА:\n${JSON.stringify(funnel, null, 2)}`;
+      const dashboardContext = await getDashboardContext(options);
+      const systemWithContext = `${HURMO_AI_SYSTEM_PROMPT}
+
+ТЕКУЩИЙ КОНТЕКСТ ДИАЛОГА:
+- Текущая дата: ${new Date().toISOString().slice(0, 10)}
+- Период фильтра: ${options.period?.startDate || 'не указан'} — ${options.period?.endDate || 'не указан'}
+- Регион: ${options.selectedRegion || 'все регионы'}
+- Роль пользователя: ${options.userContext?.role || 'неизвестна'}
+- Имя пользователя: ${options.userContext?.username || 'не указано'}
+
+ВАЖНО ДЛЯ ЖИВОГО ДИАЛОГА:
+- Учитывай предыдущие сообщения и отвечай именно на последний вопрос, не начинай каждый раз новый отчёт.
+- Если пользователь пишет «это», «там», «а почему», «сравни с прошлым» — связывай это с предыдущими репликами.
+- Если данных недостаточно, задай один короткий уточняющий вопрос вместо выдумывания.
+- Не повторяй приветствие и уже приведённые цифры без необходимости.
+
+АКТУАЛЬНЫЙ СРЕЗ ДАННЫХ ДАШБОРДА:
+${JSON.stringify(dashboardContext, null, 2)}`;
       const contents = messages
         .filter((m) => m.role !== 'system')
         .map((m) => ({
@@ -177,7 +235,7 @@ export async function runAIChat(options: RunChatOptions): Promise<{ reply: strin
         {
           systemInstruction: { parts: [{ text: systemWithContext }] },
           contents,
-          generationConfig: { temperature: 0.4, maxOutputTokens: 4096 },
+          generationConfig: { temperature: 0.55, maxOutputTokens: 4096 },
         },
         'AI Chat'
       );
@@ -200,27 +258,42 @@ export async function runAIChat(options: RunChatOptions): Promise<{ reply: strin
   if (openaiKey && openaiKey.trim() !== '') {
     try {
       // Подготавливаем системный промпт с актуальными данными
-      const funnel = await getFunnelMetrics(options.period || {});
-      const systemWithContext = `${HURMO_AI_SYSTEM_PROMPT}\n\nАКТУАЛЬНЫЙ СРЕЗ ДАННЫХ ДАШБОРДА:\n${JSON.stringify(funnel, null, 2)}`;
+      const dashboardContext = await getDashboardContext(options);
+      const systemWithContext = `${HURMO_AI_SYSTEM_PROMPT}
+ТЕКУЩИЙ КОНТЕКСТ: дата ${new Date().toISOString().slice(0, 10)}, период ${options.period?.startDate || 'не указан'} — ${options.period?.endDate || 'не указан'}, регион ${options.selectedRegion || 'все регионы'}, роль ${options.userContext?.role || 'неизвестна'}.
+Учитывай историю диалога, отвечай на последний вопрос и не повторяй уже сказанное.
+АКТУАЛЬНЫЕ ДАННЫЕ:
+${JSON.stringify(dashboardContext, null, 2)}`;
 
       const apiMessages = [
         { role: 'system', content: systemWithContext },
         ...messages.map((m) => ({ role: m.role, content: m.content })),
       ];
 
-      const res = await fetch(`${openaiBaseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${openaiKey}`,
-        },
-        body: JSON.stringify({
-          model: openaiModel,
-          messages: apiMessages,
-          temperature: 0.4,
-          max_tokens: 2500,
-        }),
-      });
+      const controller = new AbortController();
+      const timeout = setTimeout(
+        () => controller.abort(),
+        Number(process.env.AI_REQUEST_TIMEOUT_MS || 45_000)
+      );
+      let res;
+      try {
+        res = await fetch(`${openaiBaseUrl}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${openaiKey}`,
+          },
+          body: JSON.stringify({
+            model: openaiModel,
+            messages: apiMessages,
+            temperature: 0.4,
+            max_tokens: 2500,
+          }),
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timeout);
+      }
 
       if (res.ok) {
         const data = await res.json();

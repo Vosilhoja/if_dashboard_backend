@@ -148,7 +148,21 @@ function clearSheetCache() {
 
 async function prewarmDataCache() {
   const types = ['main', 'numbers', 'eskiz', 'not_completed'];
-  const results = await Promise.allSettled(types.map((type) => fetchAllRowsForSheet(type, true)));
+  const timeoutMs = Number(process.env.DATA_PREWARM_TIMEOUT_MS || 10_000);
+  let timeoutId;
+  const prewarm = Promise.allSettled(types.map((type) => fetchAllRowsForSheet(type, true)));
+  const timeout = new Promise<'timeout'>((resolve) => {
+    timeoutId = setTimeout(() => resolve('timeout'), timeoutMs);
+  });
+  const outcome = await Promise.race([prewarm, timeout]);
+  clearTimeout(timeoutId);
+
+  if (outcome === 'timeout') {
+    console.warn(`[Data prewarm] Таймаут ${timeoutMs} мс; сервер продолжит запуск, обновление данных выполнится в фоне.`);
+    return;
+  }
+
+  const results = outcome;
   const failed = results.filter((result) => result.status === 'rejected');
   if (failed.length > 0) {
     console.warn(`[Data prewarm] Не удалось загрузить ${failed.length} таблиц; API повторит запрос при обращении.`);
@@ -213,7 +227,6 @@ async function calculateDashboardMetrics(query: any = {}) {
   ]);
 
   // 1. Быстрый поиск номеров main_base и сбор телефонной диагностики
-  const mainPhoneSet = new Set();
   const phoneDiagnostics = {
     corrupted: 0,
     truncated: 0,
@@ -230,8 +243,25 @@ async function calculateDashboardMetrics(query: any = {}) {
       else if (diag.status === 'invalid') phoneDiagnostics.invalid++;
       else if (diag.status === 'foreign') phoneDiagnostics.foreign++;
 
-      if (diag.normalized) {
-        mainPhoneSet.add(diag.normalized);
+    }
+  }
+
+  // Атрибуция «пришёл через поддержку»: регистрация должна произойти
+  // в день звонка или позже. Регистрация до звонка считается отдельным
+  // случаем «уже был зарегистрирован», а не результатом поддержки.
+  const mainRegistrationDateByPhone = new Map();
+  if (!mainError) {
+    for (const row of mainRows) {
+      const dateStr = row['Дата создания'] || row['date'] || row['Дата'];
+      const registrationDate = parseSheetDate(dateStr);
+      const phone = normalizePhoneWithDiagnostics(
+        row['Phone'] || row['phone'] || row['Телефон']
+      ).normalized;
+      if (!phone || !registrationDate) continue;
+
+      const previousDate = mainRegistrationDateByPhone.get(phone);
+      if (!previousDate || registrationDate < previousDate) {
+        mainRegistrationDateByPhone.set(phone, registrationDate);
       }
     }
   }
@@ -317,7 +347,11 @@ async function calculateDashboardMetrics(query: any = {}) {
     for (const row of numbersInPeriod) {
       const pDiag = normalizePhoneWithDiagnostics(row['Телефон'] || row['Phone']);
       const p = pDiag.normalized;
-      if (p && mainPhoneSet.has(p)) {
+      const callDate = parseSheetDate(
+        row['Дата (формат xx.xx.xxxx)'] || row['Дата'] || row['date']
+      );
+      const registrationDate = p ? mainRegistrationDateByPhone.get(p) : undefined;
+      if (p && callDate && registrationDate && registrationDate >= callDate) {
         totalSupportMatchesCount++;
         matchedPhonesSupport.add(p);
       }
@@ -335,7 +369,11 @@ async function calculateDashboardMetrics(query: any = {}) {
         repeatStatusesFoundInPeriod++;
         const pDiag = normalizePhoneWithDiagnostics(row['Телефон'] || row['Phone']);
         const p = pDiag.normalized;
-        if (p && mainPhoneSet.has(p)) {
+        const callDate = parseSheetDate(
+          row['Дата (формат xx.xx.xxxx)'] || row['Дата'] || row['date']
+        );
+        const registrationDate = p ? mainRegistrationDateByPhone.get(p) : undefined;
+        if (p && callDate && registrationDate && registrationDate >= callDate) {
           totalRepeatMatchesCount++;
           matchedRepeatPhones.add(p);
         }
@@ -464,7 +502,7 @@ async function calculateDashboardMetrics(query: any = {}) {
       value: (numbersError || mainError) ? '—' : matchedPhonesSupport.size,
       subtext: (numbersError || mainError)
         ? undefined
-        : `Уникальных номеров в базе (всего звонков по ним: ${totalSupportMatchesCount})`,
+        : `Звонок в выбранном периоде, регистрация в этот день или позже (совпадений: ${totalSupportMatchesCount})`,
       error: (numbersError || mainError) || undefined,
     },
     registeredAfterRepeat: {
@@ -477,7 +515,7 @@ async function calculateDashboardMetrics(query: any = {}) {
         ? undefined
         : repeatStatusesFoundInPeriod === 0
         ? '0 (статусов повтора не найдено в данных)'
-        : `Уникальных номеров (всего совпадений: ${totalRepeatMatchesCount})`,
+        : `Повторный контакт до регистрации (совпадений: ${totalRepeatMatchesCount})`,
       error: (numbersError || mainError) || undefined,
     },
     declinedCount: {
