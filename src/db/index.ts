@@ -102,7 +102,9 @@ async function initDatabase() {
     client.release();
     return true;
   } catch (err) {
-    console.warn('ℹ️ [Database] PostgreSQL недоступен. Используется in-memory хранилище аккаунтов.');
+    console.warn(
+      `⚠️ [Database] PostgreSQL недоступен (${err?.message || 'неизвестная ошибка'}). Используется in-memory хранилище аккаунтов.`
+    );
     isPgConnected = false;
     return false;
   }

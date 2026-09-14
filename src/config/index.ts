@@ -34,14 +34,20 @@ module.exports = {
   },
   db: {
     // Railway PostgreSQL is enabled when DATABASE_URL is connected.
-    connectionString: process.env.DATABASE_URL,
-    enabled: process.env.DB_ENABLED !== 'false' && Boolean(process.env.DATABASE_URL),
-    host: process.env.DB_HOST || 'localhost',
-    port: parseInt(process.env.DB_PORT, 10) || 5432,
-    user: process.env.DB_USER || 'postgres',
-    password: process.env.DB_PASSWORD || 'postgres',
-    database: process.env.DB_NAME || 'hurmo_dashboard',
-    ssl: process.env.DB_SSL !== 'false' && Boolean(process.env.DATABASE_URL)
+    connectionString: process.env.DATABASE_URL || process.env.POSTGRES_URL,
+    enabled: process.env.DB_ENABLED !== 'false' && Boolean(
+      process.env.DATABASE_URL ||
+      process.env.POSTGRES_URL ||
+      process.env.PGHOST
+    ),
+    host: process.env.DB_HOST || process.env.PGHOST || 'localhost',
+    port: parseInt(process.env.DB_PORT || process.env.PGPORT, 10) || 5432,
+    user: process.env.DB_USER || process.env.PGUSER || 'postgres',
+    password: process.env.DB_PASSWORD || process.env.PGPASSWORD || 'postgres',
+    database: process.env.DB_NAME || process.env.PGDATABASE || 'hurmo_dashboard',
+    ssl: process.env.DB_SSL !== 'false' && Boolean(
+      process.env.DATABASE_URL || process.env.POSTGRES_URL || process.env.PGHOST
+    )
       ? { rejectUnauthorized: true }
       : false
   },

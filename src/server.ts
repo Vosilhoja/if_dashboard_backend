@@ -133,6 +133,8 @@ async function startServer() {
     // dashboard render uses ready data instead of waiting on four API calls.
     await prewarmDataCache();
     startBackgroundDataRefresh();
+    // Google Sheets worker is optional at boot: API and health endpoint must
+    // remain available while Railway variables are being configured.
     startCallWorker();
 
     // Запуск сервера

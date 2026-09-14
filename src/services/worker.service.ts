@@ -32,10 +32,21 @@ function toRow(call: CallQueuePayload): SheetRow {
 }
 
 export function startCallWorker() {
+  const clientEmail = String(config.google.clientEmail || '').trim();
+  const privateKey = String(config.google.privateKey || '').trim();
+  const spreadsheetId = String(config.google.sheetCalls || '').trim();
+
+  if (!clientEmail || !privateKey || !spreadsheetId) {
+    console.warn(
+      '[Call worker] Google Sheets не настроен. Worker отключен; добавьте GOOGLE_SERVICE_ACCOUNT_EMAIL, GOOGLE_PRIVATE_KEY и GOOGLE_SHEET_CALLS в Railway Variables.'
+    );
+    return null;
+  }
+
   const sheets = new GoogleSheetsService({
-    clientEmail: String(config.google.clientEmail || ''),
-    privateKey: String(config.google.privateKey || ''),
-    spreadsheetId: String(config.google.sheetCalls || ''),
+    clientEmail,
+    privateKey,
+    spreadsheetId,
     sheetName: process.env.GOOGLE_SHEET_CALLS_TAB || 'calls',
   });
 

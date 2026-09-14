@@ -35,6 +35,7 @@ Senior-level архитектура бэкенда для аналитическ
    - Второй `super_admin` создать нельзя. Для новых пользователей доступны роли `admin`, `manager`, `operator` и `viewer`.
    - Если страница не выбрана, она скрывается в меню, а прямой переход на неё возвращает 404.
    - Redis нужен для очереди звонков. Если `DATABASE_URL` не задан локально, используется временный in-memory fallback.
+   - В Railway свяжите PostgreSQL с backend через Reference Variable `DATABASE_URL` (или передайте стандартные `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`). Без этого пользователи не сохраняются после перезапуска.
 
 5. **Telegram Bot (@HURMO_UZ_NOTIFICATIONS_BOT)**:
    - Токен: задаётся через переменную окружения `TELEGRAM_BOT_TOKEN` (см. `.env.example`)
