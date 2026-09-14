@@ -83,45 +83,46 @@ async function fetchAllRowsForSheet(type, forceRefresh = false) {
     return cache[cacheKey].data;
   }
 
-  async function refreshSheet(type) {
-    try {
-      await fetchAllRowsForSheet(type, true);
-    } catch (error) {
-      console.error(`[Data refresh] ${type}:`, error.message || error);
-    }
-  }
-
   if (inFlight[cacheKey]) {
     return inFlight[cacheKey];
   }
 
   inFlight[cacheKey] = (async () => {
-    const auth = getJwtClient();
-    const sheetId = getSheetId(type);
-    const doc = new GoogleSpreadsheet(sheetId, auth);
+    try {
+      const auth = getJwtClient();
+      const sheetId = getSheetId(type);
+      const doc = new GoogleSpreadsheet(sheetId, auth);
 
-    await doc.loadInfo();
-    let sheet = doc.sheetsByIndex[0];
-    if (type === 'numbers_repeat') {
-      sheet = doc.sheetsByTitle['Повторные'] || doc.sheetsByTitle['повторные'] || doc.sheetsByIndex[1] || sheet;
-    }
-    if (!sheet) {
-      throw new Error(`Лист не найден в документе Google Таблицы для "${type}"`);
-    }
-
-    await sheet.loadHeaderRow();
-    const rawRows = await sheet.getRows();
-
-    const data = rawRows.map((row) => {
-      const obj = {};
-      for (const h of sheet.headerValues || []) {
-        obj[h] = row.get(h) ?? '';
+      await doc.loadInfo();
+      let sheet = doc.sheetsByIndex[0];
+      if (type === 'numbers_repeat') {
+        sheet = doc.sheetsByTitle['Повторные'] || doc.sheetsByTitle['повторные'] || doc.sheetsByIndex[1] || sheet;
       }
-      return obj;
-    });
+      if (!sheet) {
+        throw new Error(`Лист не найден в документе Google Таблицы для "${type}"`);
+      }
 
-    cache[cacheKey] = { data, timestamp: Date.now() };
-    return data;
+      await sheet.loadHeaderRow();
+      const rawRows = await sheet.getRows();
+
+      const data = rawRows.map((row) => {
+        const obj = {};
+        for (const h of sheet.headerValues || []) {
+          obj[h] = row.get(h) ?? '';
+        }
+        return obj;
+      });
+
+      console.log(`[GoogleSheets API] Успешно загружено ${data.length} строк для "${type}"`);
+      cache[cacheKey] = { data, timestamp: Date.now() };
+      return data;
+    } catch (err) {
+      console.error(`[GoogleSheets API Error] Ошибка загрузки таблицы "${type}":`, {
+        code: err.code || err.status,
+        message: err.message || String(err),
+      });
+      throw err;
+    }
   })();
 
   try {
@@ -135,7 +136,7 @@ async function refreshSheet(type) {
   try {
     await fetchAllRowsForSheet(type, true);
   } catch (error) {
-    console.error(`[Data refresh] ${type}:`, error.message || error);
+    console.error(`[Data refresh error] ${type}:`, error.message || error);
   }
 }
 

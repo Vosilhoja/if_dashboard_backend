@@ -8,7 +8,13 @@ class UserModel {
     if (isPgConnected() && pool) {
       try {
         const res = await pool.query(
-          'SELECT u.*, COALESCE(u.permissions, r.permissions, \'[]\'::jsonb) as permissions FROM users u LEFT JOIN roles r ON u.role = r.name WHERE LOWER(u.username) = $1',
+          `SELECT u.*, 
+           CASE 
+             WHEN u.role = 'super_admin' THEN '["*"]'::jsonb
+             WHEN u.permissions IS NOT NULL AND jsonb_array_length(u.permissions) > 0 THEN u.permissions 
+             ELSE COALESCE(r.permissions, '[]'::jsonb) 
+           END as permissions 
+           FROM users u LEFT JOIN roles r ON u.role = r.name WHERE LOWER(u.username) = $1`,
           [cleanUsername]
         );
         return res.rows[0] || null;
@@ -23,7 +29,7 @@ class UserModel {
     const roleInfo = inMemoryStore.roles.find(r => r.name === user.role);
     return {
       ...user,
-      permissions: (user.permissions && user.permissions.length > 0) ? user.permissions : (roleInfo ? roleInfo.permissions : [])
+      permissions: user.role === 'super_admin' ? ['*'] : ((user.permissions && user.permissions.length > 0) ? user.permissions : (roleInfo ? roleInfo.permissions : []))
     };
   }
 
@@ -33,7 +39,13 @@ class UserModel {
     if (isPgConnected() && pool) {
       try {
         const res = await pool.query(
-          'SELECT u.id, u.username, u.full_name, u.role, u.is_active, u.telegram_id, u.last_login, u.created_at, COALESCE(u.permissions, r.permissions, \'[]\'::jsonb) as permissions FROM users u LEFT JOIN roles r ON u.role = r.name WHERE u.id = $1',
+          `SELECT u.id, u.username, u.full_name, u.role, u.is_active, u.telegram_id, u.last_login, u.created_at, 
+           CASE 
+             WHEN u.role = 'super_admin' THEN '["*"]'::jsonb
+             WHEN u.permissions IS NOT NULL AND jsonb_array_length(u.permissions) > 0 THEN u.permissions 
+             ELSE COALESCE(r.permissions, '[]'::jsonb) 
+           END as permissions 
+           FROM users u LEFT JOIN roles r ON u.role = r.name WHERE u.id = $1`,
           [numId]
         );
         return res.rows[0] || null;
@@ -54,7 +66,7 @@ class UserModel {
       telegram_id: user.telegram_id,
       last_login: user.last_login,
       created_at: user.created_at,
-      permissions: (user.permissions && user.permissions.length > 0) ? user.permissions : (roleInfo ? roleInfo.permissions : [])
+      permissions: user.role === 'super_admin' ? ['*'] : ((user.permissions && user.permissions.length > 0) ? user.permissions : (roleInfo ? roleInfo.permissions : []))
     };
   }
 
@@ -171,7 +183,14 @@ class UserModel {
     if (isPgConnected() && pool) {
       try {
         const res = await pool.query(
-          'SELECT u.id, u.username, u.full_name, u.role, COALESCE(u.permissions, r.permissions, \'[]\'::jsonb) as permissions, u.is_active, u.telegram_id, u.last_login, u.created_at FROM users u LEFT JOIN roles r ON u.role = r.name ORDER BY u.id ASC'
+          `SELECT u.id, u.username, u.full_name, u.role, 
+           CASE 
+             WHEN u.role = 'super_admin' THEN '["*"]'::jsonb
+             WHEN u.permissions IS NOT NULL AND jsonb_array_length(u.permissions) > 0 THEN u.permissions 
+             ELSE COALESCE(r.permissions, '[]'::jsonb) 
+           END as permissions, 
+           u.is_active, u.telegram_id, u.last_login, u.created_at 
+           FROM users u LEFT JOIN roles r ON u.role = r.name ORDER BY u.id ASC`
         );
         return res.rows;
       } catch (e) {
@@ -186,7 +205,7 @@ class UserModel {
         username: u.username,
         full_name: u.full_name,
         role: u.role,
-        permissions: (u.permissions && u.permissions.length > 0) ? u.permissions : (roleInfo ? roleInfo.permissions : []),
+        permissions: u.role === 'super_admin' ? ['*'] : ((u.permissions && u.permissions.length > 0) ? u.permissions : (roleInfo ? roleInfo.permissions : [])),
         is_active: u.is_active,
         telegram_id: u.telegram_id,
         last_login: u.last_login,
@@ -200,7 +219,13 @@ class UserModel {
     if (isPgConnected() && pool) {
       try {
         const res = await pool.query(
-          'UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2 RETURNING id, username, role',
+          `UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2 
+           RETURNING id, username, role, 
+           CASE 
+             WHEN role = 'super_admin' THEN '["*"]'::jsonb
+             WHEN permissions IS NOT NULL AND jsonb_array_length(permissions) > 0 THEN permissions 
+             ELSE '[]'::jsonb 
+           END as permissions`,
           [newRole, Number(userId)]
         );
         return res.rows[0] || null;
@@ -212,7 +237,7 @@ class UserModel {
     const user = inMemoryStore.users.find(u => u.id === Number(userId));
     if (user) {
       user.role = newRole;
-      return { id: user.id, username: user.username, role: user.role };
+      return { id: user.id, username: user.username, role: user.role, permissions: user.permissions || [] };
     }
     return null;
   }

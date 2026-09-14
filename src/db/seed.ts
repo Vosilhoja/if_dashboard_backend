@@ -11,7 +11,8 @@ async function seedDefaultUsers() {
       username: config.auth.adminUsername,
       password: config.auth.adminPassword,
       fullName: 'Chief Administrator (HURMO)',
-      role: 'super_admin'
+      role: 'super_admin',
+      permissions: ['*']
     }
   ];
 
@@ -20,9 +21,14 @@ async function seedDefaultUsers() {
     if (!existing) {
       await UserModel.create(account);
       console.log(`👤 [Seed] Создан аккаунт: ${account.username} (Роль: ${account.role})`);
-    } else if (!(await UserModel.comparePassword(account.password, existing.password_hash))) {
-      await UserModel.updatePassword(existing.id, account.password);
-      console.log(`🔐 [Seed] Пароль аккаунта ${account.username} синхронизирован с ADMIN_PASSWORD`);
+    } else {
+      if (!(await UserModel.comparePassword(account.password, existing.password_hash))) {
+        await UserModel.updatePassword(existing.id, account.password);
+        console.log(`🔐 [Seed] Пароль аккаунта ${account.username} синхронизирован с ADMIN_PASSWORD`);
+      }
+      if (existing.role === 'super_admin') {
+        await UserModel.updateUserPermissions(existing.id, ['*']);
+      }
     }
   }
 }

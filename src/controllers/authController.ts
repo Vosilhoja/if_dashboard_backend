@@ -71,7 +71,7 @@ class AuthController {
           username: user.username,
           fullName: user.full_name,
           role: user.role,
-          permissions: user.permissions || [],
+          permissions: user.role === 'super_admin' ? ['*'] : (user.permissions || []),
           telegramLinked: !!user.telegram_id
         }
       });
@@ -88,9 +88,19 @@ class AuthController {
    * Получение профиля текущего пользователя
    */
   static async getMe(req, res) {
+    const user = req.user;
     return res.status(200).json({
       status: 'success',
-      user: req.user
+      user: {
+        id: user.id,
+        username: user.username,
+        fullName: user.full_name,
+        role: user.role,
+        permissions: user.role === 'super_admin' ? ['*'] : (user.permissions || []),
+        telegramLinked: !!user.telegram_id,
+        isActive: user.is_active,
+        createdAt: user.created_at
+      }
     });
   }
 

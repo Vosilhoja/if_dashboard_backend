@@ -25,7 +25,20 @@ const loginLimiter = rateLimit({
   }
 });
 
+// Защитный лимитер для ИИ аналитика (разумный лимит 120 запросов в час)
+const aiLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 час
+  max: 120, // максимум 120 запросов в час с одного IP
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    status: 'fail',
+    error: 'Превышен лимит запросов к ИИ-аналитику (максимум 120 запросов в час). Пожалуйста, повторите попытку позже.'
+  }
+});
+
 module.exports = {
   apiLimiter,
-  loginLimiter
+  loginLimiter,
+  aiLimiter
 };
