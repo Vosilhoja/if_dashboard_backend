@@ -2,7 +2,10 @@ const express = require('express');
 const router = express.Router();
 const { authenticateToken } = require('../middleware/auth');
 const { aiLimiter } = require('../middleware/rateLimiter');
-const { chat, insights } = require('../controllers/aiController');
+const { chat, insights, history, clearHistory } = require('../controllers/aiController');
+
+router.get('/history', authenticateToken, history);
+router.delete('/history', authenticateToken, clearHistory);
 
 /**
  * POST /api/ai/chat

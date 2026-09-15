@@ -12,7 +12,8 @@ const inMemoryStore = {
     { id: 4, name: 'operator', description: 'Оператор колл-центра: работа со звонками и базой', permissions: ['view_calls', 'edit_call_status'] },
     { id: 5, name: 'viewer', description: 'Наблюдатель: только чтение сводных отчетов', permissions: ['view_dashboard'] }
   ],
-  auditLogs: []
+  auditLogs: [],
+  aiChatMessages: new Map()
 };
 
 let pool = null;
@@ -87,6 +88,17 @@ async function initDatabase() {
         details JSONB,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
+
+      CREATE TABLE IF NOT EXISTS ai_chat_messages (
+        id BIGSERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        role VARCHAR(20) NOT NULL CHECK (role IN ('user', 'assistant')),
+        content TEXT NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_ai_chat_messages_user_created
+        ON ai_chat_messages (user_id, created_at, id);
     `);
 
     // Заполнение стандартных ролей в PG
