@@ -613,7 +613,6 @@ async function calculateDashboardMetrics(query: any = {}) {
   }
 
   // Метрика 4: Зарегистрировано после контакта с поддержкой
-  let totalSupportMatchesCount = 0;
   const matchedPhonesSupport = new Set();
   if (!numbersError && !mainError) {
     for (const row of numbersInPeriod) {
@@ -623,8 +622,14 @@ async function calculateDashboardMetrics(query: any = {}) {
         row['Дата (формат xx.xx.xxxx)'] || row['Дата'] || row['date']
       );
       const registrationDate = p ? mainRegistrationDateByPhone.get(p) : undefined;
-      if (p && callDate && registrationDate && registrationDate >= callDate) {
-        totalSupportMatchesCount++;
+      if (
+        p &&
+        callDate &&
+        registrationDate &&
+        isDateInRange(callDate, startDate, endDate) &&
+        isDateInRange(registrationDate, startDate, endDate) &&
+        registrationDate >= callDate
+      ) {
         matchedPhonesSupport.add(p);
       }
     }
@@ -632,7 +637,6 @@ async function calculateDashboardMetrics(query: any = {}) {
 
   // Метрика 5: Зарегистрировано после повторной ссылки
   let repeatStatusesFoundInPeriod = 0;
-  let totalRepeatMatchesCount = 0;
   const matchedRepeatPhones = new Set();
   if (!numbersError && !mainError) {
     for (const row of numbersInPeriod) {
@@ -645,8 +649,14 @@ async function calculateDashboardMetrics(query: any = {}) {
           row['Дата (формат xx.xx.xxxx)'] || row['Дата'] || row['date']
         );
         const registrationDate = p ? mainRegistrationDateByPhone.get(p) : undefined;
-        if (p && callDate && registrationDate && registrationDate >= callDate) {
-          totalRepeatMatchesCount++;
+        if (
+          p &&
+          callDate &&
+          registrationDate &&
+          isDateInRange(callDate, startDate, endDate) &&
+          isDateInRange(registrationDate, startDate, endDate) &&
+          registrationDate >= callDate
+        ) {
           matchedRepeatPhones.add(p);
         }
       }
@@ -775,10 +785,18 @@ async function calculateDashboardMetrics(query: any = {}) {
     },
     registeredFromSupport: {
       value: (numbersError || mainError) ? '—' : matchedPhonesSupport.size,
+      statusText: (numbersError || mainError || numbersInPeriod.length === 0)
+        ? undefined
+        : `Конверсия: ${((matchedPhonesSupport.size / numbersInPeriod.length) * 100).toFixed(1)}%`,
       subtext: (numbersError || mainError)
         ? undefined
-        : `Звонок в выбранном периоде, регистрация в этот день или позже (совпадений: ${totalSupportMatchesCount})`,
+        : `Уникальные регистрации из ${numbersInPeriod.length.toLocaleString('ru-RU')} звонков`,
       error: (numbersError || mainError) || undefined,
+    },
+    supportContactsCount: {
+      value: numbersError ? '—' : numbersInPeriod.length,
+      subtext: numbersError ? undefined : 'Всего звонков поддержки за выбранный период',
+      error: numbersError || undefined,
     },
     registeredAfterRepeat: {
       value: (numbersError || mainError)
@@ -786,12 +804,20 @@ async function calculateDashboardMetrics(query: any = {}) {
         : repeatStatusesFoundInPeriod === 0
         ? 0
         : matchedRepeatPhones.size,
+      statusText: (numbersError || mainError || repeatStatusesFoundInPeriod === 0)
+        ? undefined
+        : `Конверсия: ${((matchedRepeatPhones.size / repeatStatusesFoundInPeriod) * 100).toFixed(1)}%`,
       subtext: (numbersError || mainError)
         ? undefined
         : repeatStatusesFoundInPeriod === 0
         ? '0 (статусов повтора не найдено в данных)'
-        : `Повторный контакт до регистрации (совпадений: ${totalRepeatMatchesCount})`,
+        : `Уникальные регистрации из ${repeatStatusesFoundInPeriod.toLocaleString('ru-RU')} повторных звонков`,
       error: (numbersError || mainError) || undefined,
+    },
+    repeatContactsCount: {
+      value: numbersError ? '—' : repeatStatusesFoundInPeriod,
+      subtext: numbersError ? undefined : 'Всего повторных контактов за выбранный период',
+      error: numbersError || undefined,
     },
     declinedCount: {
       value: numbersError ? '—' : declinedVal,
