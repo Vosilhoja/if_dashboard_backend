@@ -29,7 +29,23 @@ const DASHBOARD_METRICS_CACHE_TTL_MS = 60 * 1000;
 const MIN_FORCED_SHEET_REFRESH_MS = 60 * 1000;
 let dashboardMetricsActive = 0;
 const dashboardMetricsWaiters = [];
-const MAX_DASHBOARD_METRICS_CONCURRENCY = 2;
+// A metrics calculation keeps several large sheet snapshots alive while it
+// builds phone/date indexes. Running two calculations concurrently can exceed
+// Railway's memory limit with the production-sized sheets.
+const MAX_DASHBOARD_METRICS_CONCURRENCY = 1;
+
+function getCallStatus(row) {
+  return String(
+    row['Коментарий'] ||
+    row['Комментарий'] ||
+    row['Статус'] ||
+    row['Status'] ||
+    row['status'] ||
+    row['comment'] ||
+    row['Comment'] ||
+    ''
+  ).trim();
+}
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -114,9 +130,8 @@ async function fetchAllRowsForSheet(type, forceRefresh = false) {
       return cache[cacheKey].data;
     }
 
-    // Serve the last complete snapshot immediately and refresh it in the
-    // background. The next page request never waits for Google Sheets.
-    void refreshSheet(type);
+    // Keep serving the last complete snapshot until the user explicitly
+    // requests synchronization with refresh=true.
     return cache[cacheKey].data;
   }
 
@@ -227,57 +242,12 @@ async function withDashboardMetricsSlot(task) {
 }
 
 async function prewarmDataCache() {
-  if (String(process.env.DATA_PREWARM_ENABLED || '').toLowerCase() !== 'true') {
-    console.log('[Data prewarm] Отключен по умолчанию; таблицы загрузятся по первому запросу и будут закэшированы.');
-    return;
-  }
-
-  const types = ['main', 'numbers', 'eskiz', 'not_completed', 'survey_attempts'];
-  const timeoutMs = Number(process.env.DATA_PREWARM_TIMEOUT_MS || 10_000);
-  let timeoutId;
-  const prewarm = Promise.allSettled(types.map((type) => fetchAllRowsForSheet(type, true)));
-  const timeout = new Promise<'timeout'>((resolve) => {
-    timeoutId = setTimeout(() => resolve('timeout'), timeoutMs);
-  });
-  const outcome = await Promise.race([prewarm, timeout]);
-  clearTimeout(timeoutId);
-
-  if (outcome === 'timeout') {
-    console.warn(`[Data prewarm] Таймаут ${timeoutMs} мс; сервер продолжит запуск, обновление данных выполнится в фоне.`);
-    return;
-  }
-
-  const results = outcome;
-  const failed = results.filter((result) => result.status === 'rejected');
-  if (failed.length > 0) {
-    console.warn(`[Data prewarm] Не удалось загрузить ${failed.length} таблиц; API повторит запрос при обращении.`);
-  }
+  console.log('[Data prewarm] Отключен: данные загружаются только при первом запросе или ручной синхронизации.');
 }
 
 function startBackgroundDataRefresh() {
-  if (String(process.env.DATA_BACKGROUND_REFRESH_ENABLED || '').toLowerCase() !== 'true') {
-    console.log('[Data refresh] Фоновое обновление отключено по умолчанию; используйте ручной refresh или включите DATA_BACKGROUND_REFRESH_ENABLED=true.');
-    return null;
-  }
-
-  const timer = setInterval(() => {
-    if (backgroundRefreshInProgress) return;
-    backgroundRefreshInProgress = true;
-
-    // Refresh one sheet at a time to avoid holding old and newly materialized
-    // snapshots for every source simultaneously.
-    void (async () => {
-      try {
-        for (const type of ['main', 'numbers', 'eskiz', 'not_completed', 'survey_attempts']) {
-          await refreshSheet(type);
-        }
-      } finally {
-        backgroundRefreshInProgress = false;
-      }
-    })();
-  }, BACKGROUND_REFRESH_MS);
-  timer.unref?.();
-  return timer;
+  console.log('[Data refresh] Фоновое обновление отключено; используйте ручной refresh=true.');
+  return null;
 }
 
 const SURVEY_REGION_NAMES = {
@@ -579,7 +549,7 @@ async function calculateDashboardMetrics(query: any = {}) {
 
   if (!numbersError) {
     for (const row of numbersInPeriod) {
-      const comment = (row['Коментарий'] || '').trim();
+      const comment = getCallStatus(row);
 
       if (isLinkSentStatus(comment, STATUS_CONFIG.linkSent)) {
         numbersLinkSentCount++;
@@ -618,16 +588,17 @@ async function calculateDashboardMetrics(query: any = {}) {
     for (const row of numbersInPeriod) {
       const pDiag = normalizePhoneWithDiagnostics(row['Телефон'] || row['Phone']);
       const p = pDiag.normalized;
+      const comment = getCallStatus(row);
       const callDate = parseSheetDate(
         row['Дата (формат xx.xx.xxxx)'] || row['Дата'] || row['date']
       );
       const registrationDate = p ? mainRegistrationDateByPhone.get(p) : undefined;
       if (
         p &&
+        !isAlreadyRegisteredStatus(comment, STATUS_CONFIG.alreadyRegistered) &&
         callDate &&
         registrationDate &&
         isDateInRange(callDate, startDate, endDate) &&
-        isDateInRange(registrationDate, startDate, endDate) &&
         registrationDate >= callDate
       ) {
         matchedPhonesSupport.add(p);
@@ -640,25 +611,18 @@ async function calculateDashboardMetrics(query: any = {}) {
   const matchedRepeatPhones = new Set();
   if (!numbersError && !mainError) {
     for (const row of numbersInPeriod) {
-      const comment = (row['Коментарий'] || '').trim();
-      if (isRepeatSentStatus(comment, STATUS_CONFIG.repeatSent)) {
-        repeatStatusesFoundInPeriod++;
-        const pDiag = normalizePhoneWithDiagnostics(row['Телефон'] || row['Phone']);
-        const p = pDiag.normalized;
-        const callDate = parseSheetDate(
-          row['Дата (формат xx.xx.xxxx)'] || row['Дата'] || row['date']
-        );
-        const registrationDate = p ? mainRegistrationDateByPhone.get(p) : undefined;
-        if (
-          p &&
-          callDate &&
-          registrationDate &&
-          isDateInRange(callDate, startDate, endDate) &&
-          isDateInRange(registrationDate, startDate, endDate) &&
-          registrationDate >= callDate
-        ) {
-          matchedRepeatPhones.add(p);
-        }
+      const comment = getCallStatus(row);
+      if (!isRepeatSentStatus(comment, STATUS_CONFIG.repeatSent)) continue;
+      if (isAlreadyRegisteredStatus(comment, STATUS_CONFIG.alreadyRegistered)) continue;
+
+      repeatStatusesFoundInPeriod++;
+      const p = normalizePhoneWithDiagnostics(row['Телефон'] || row['Phone'] || row['phone']).normalized;
+      const callDate = parseSheetDate(
+        row['Дата (формат xx.xx.xxxx)'] || row['Дата'] || row['date'] || row['Дата звонка']
+      );
+      const registrationDate = p ? mainRegistrationDateByPhone.get(p) : undefined;
+      if (p && callDate && registrationDate && registrationDate >= callDate) {
+        matchedRepeatPhones.add(p);
       }
     }
   }
@@ -708,7 +672,7 @@ async function calculateDashboardMetrics(query: any = {}) {
         const d = parseSheetDate(dateStr);
         if (d && d >= wStart && d <= wEnd && activeDaysOfWeek.has(d.getDay())) {
           wCalls++;
-          const comment = (row['Коментарий'] || '').trim();
+          const comment = getCallStatus(row);
           if (isDeclinedStatus(comment, STATUS_CONFIG.declined)) {
             wDeclined++;
           }
@@ -816,7 +780,9 @@ async function calculateDashboardMetrics(query: any = {}) {
     },
     repeatContactsCount: {
       value: numbersError ? '—' : repeatStatusesFoundInPeriod,
-      subtext: numbersError ? undefined : 'Всего повторных контактов за выбранный период',
+      subtext: numbersError
+        ? undefined
+        : `За период; регистраций после повторного звонка: ${matchedRepeatPhones.size.toLocaleString('ru-RU')}`,
       error: numbersError || undefined,
     },
     declinedCount: {
@@ -991,6 +957,7 @@ async function getSheetPaginated(type, page = 1, pageSize = 25, search = '', for
 module.exports = {
   fetchAllRowsForSheet,
   clearSheetCache,
+  withDashboardMetricsSlot,
   prewarmDataCache,
   startBackgroundDataRefresh,
   calculateDashboardMetrics,

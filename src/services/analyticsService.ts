@@ -1,5 +1,5 @@
 const { subDays } = require('date-fns');
-const { fetchAllRowsForSheet, clearSheetCache } = require('./googleSheets');
+const { fetchAllRowsForSheet, withDashboardMetricsSlot } = require('./googleSheets');
 const { formatDateToISO } = require('../utils/dateUtils');
 
 function binAge(age) {
@@ -126,12 +126,8 @@ function aggregateTopCrossCombinations(rows) {
     .map(([combination, count]) => ({ combination, count }));
 }
 
-async function getAnalyticsData(query: any = {}) {
+async function calculateAnalyticsData(query: any = {}) {
   const { startDate = '', endDate = '', refresh = false } = query;
-
-  if (refresh) {
-    clearSheetCache();
-  }
 
   const mainRows = await fetchAllRowsForSheet('main', refresh);
 
@@ -252,5 +248,6 @@ async function getAnalyticsData(query: any = {}) {
 }
 
 module.exports = {
-  getAnalyticsData
+  getAnalyticsData: (query: any = {}) =>
+    withDashboardMetricsSlot(() => calculateAnalyticsData(query))
 };
