@@ -15,8 +15,27 @@ const {
 // Refresh frequently while reusing the same data for concurrent dashboard requests.
 const CACHE_TTL_MS = 30 * 1000;
 const BACKGROUND_REFRESH_MS = 20 * 1000;
+const SHEET_REQUEST_RETRY_LIMIT = 4;
+const SHEET_REQUEST_BACKOFF_BASE_MS = 1000;
 const cache = {};
 const inFlight = {};
+let sheetReadQueue = Promise.resolve();
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isQuotaExceededError(error) {
+  const code = Number(error?.code ?? error?.status ?? error?.response?.status ?? 0);
+  const message = String(error?.message || error || '');
+  return code === 429 || /quota|rate limit|too many requests/i.test(message);
+}
+
+async function withSheetReadLock(task) {
+  const queued = sheetReadQueue.then(() => task(), () => task());
+  sheetReadQueue = queued.then(() => undefined, () => undefined);
+  return queued;
+}
 
 function getJwtClient() {
   const email = config.google.clientEmail;
@@ -91,40 +110,53 @@ async function fetchAllRowsForSheet(type, forceRefresh = false) {
   }
 
   inFlight[cacheKey] = (async () => {
-    try {
-      const auth = getJwtClient();
-      const sheetId = getSheetId(type);
-      const doc = new GoogleSpreadsheet(sheetId, auth);
+    let attempt = 0;
 
-      await doc.loadInfo();
-      let sheet = doc.sheetsByIndex[0];
-      if (type === 'numbers_repeat') {
-        sheet = doc.sheetsByTitle['Повторные'] || doc.sheetsByTitle['повторные'] || doc.sheetsByIndex[1] || sheet;
-      }
-      if (!sheet) {
-        throw new Error(`Лист не найден в документе Google Таблицы для "${type}"`);
-      }
+    while (true) {
+      try {
+        return await withSheetReadLock(async () => {
+          const auth = getJwtClient();
+          const sheetId = getSheetId(type);
+          const doc = new GoogleSpreadsheet(sheetId, auth);
 
-      await sheet.loadHeaderRow();
-      const rawRows = await sheet.getRows();
+          await doc.loadInfo();
+          let sheet = doc.sheetsByIndex[0];
+          if (type === 'numbers_repeat') {
+            sheet = doc.sheetsByTitle['Повторные'] || doc.sheetsByTitle['повторные'] || doc.sheetsByIndex[1] || sheet;
+          }
+          if (!sheet) {
+            throw new Error(`Лист не найден в документе Google Таблицы для "${type}"`);
+          }
 
-      const data = rawRows.map((row) => {
-        const obj = {};
-        for (const h of sheet.headerValues || []) {
-          obj[h] = row.get(h) ?? '';
+          await sheet.loadHeaderRow();
+          const rawRows = await sheet.getRows();
+
+          const data = rawRows.map((row) => {
+            const obj = {};
+            for (const h of sheet.headerValues || []) {
+              obj[h] = row.get(h) ?? '';
+            }
+            return obj;
+          });
+
+          console.log(`[GoogleSheets API] Успешно загружено ${data.length} строк для "${type}"`);
+          cache[cacheKey] = { data, timestamp: Date.now() };
+          return data;
+        });
+      } catch (err) {
+        if (!isQuotaExceededError(err) || attempt >= SHEET_REQUEST_RETRY_LIMIT) {
+          console.error(`[GoogleSheets API Error] Ошибка загрузки таблицы "${type}":`, {
+            code: err.code || err.status,
+            message: err.message || String(err),
+          });
+          throw err;
         }
-        return obj;
-      });
 
-      console.log(`[GoogleSheets API] Успешно загружено ${data.length} строк для "${type}"`);
-      cache[cacheKey] = { data, timestamp: Date.now() };
-      return data;
-    } catch (err) {
-      console.error(`[GoogleSheets API Error] Ошибка загрузки таблицы "${type}":`, {
-        code: err.code || err.status,
-        message: err.message || String(err),
-      });
-      throw err;
+        const delayMs = Math.min(30_000, SHEET_REQUEST_BACKOFF_BASE_MS * 2 ** attempt + Math.random() * 500);
+        attempt += 1;
+        console.warn(`[GoogleSheets API] Квота Google Sheets исчерпана для "${type}". Повтор через ${Math.round(delayMs)}мс (попытка ${attempt}/${SHEET_REQUEST_RETRY_LIMIT})`);
+        await sleep(delayMs);
+      }
     }
   })();
 
