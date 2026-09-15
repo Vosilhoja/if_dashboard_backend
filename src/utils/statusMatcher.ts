@@ -34,6 +34,7 @@ const STATUS_CONFIG = {
       "foydalanmasligini aytdi",
       "vaqti yo'q",
       'vaqti yo`q',
+      'vaqti yoq',
       "o'chirib qo'ydi",
       'o`chirib qo`ydi',
       'учириб куйди',
@@ -133,23 +134,31 @@ function normalizeText(text) {
 
 const SEMANTIC_CATEGORY_ROOTS = {
   declined: [
-    'otkaz', 'rad', 'foydalan', 'vaqt', 'ochir', 'uchir', 'kerak',
-    'xohla', 'hohla', 'istam', 'otmen', 'gaplash', 'keragi',
+    'otkaz', 'foydalan', 'ochir', 'uchir', 'otmen', 'gaplash',
     'бросил', 'отказ', 'нет времени'
   ],
   linkSent: [
-    'silka', 'yuboril', 'yubordik', 'sms', 'havola', 'отправлен', 'ссылк'
+    'silka', 'yuboril', 'yubordik', 'havola', 'отправлен', 'ссылк'
   ],
   repeatSent: [
     'povtor', 'qayta', 'повтор', 'кайта'
   ],
   alreadyRegistered: [
-    'registratsiya', 'botdan', 'avval', 'oldin', 'royxat', 'ulangan', 'зарегистр', 'уже'
+    'botdan', 'зарегистр', 'уже'
   ],
   wrongPerson: [
-    'boshqa', 'notogri', 'xato', 'notugri', 'adashgan', 'не тот', 'неправильн', 'чужой'
+    'notogri', 'notugri', 'adashgan', 'не тот', 'неправильн', 'чужой'
   ]
 };
+
+function containsRoot(text, root) {
+  const normalizedRoot = normalizeText(root);
+  if (!normalizedRoot) return false;
+  if (normalizedRoot.includes(' ')) {
+    return text.includes(normalizedRoot);
+  }
+  return text.split(' ').some((word) => word.startsWith(normalizedRoot));
+}
 
 function matchesCategory(rawText, category) {
   if (!rawText) return false;
@@ -164,10 +173,10 @@ function matchesCategory(rawText, category) {
   if (semanticRoots) {
     for (const root of semanticRoots) {
       if (
-        norm.includes(root) ||
-        latinNorm.includes(root) ||
-        collapsedNorm.includes(root) ||
-        collapsedLatin.includes(root)
+        containsRoot(norm, root) ||
+        containsRoot(latinNorm, root) ||
+        containsRoot(collapsedNorm, root) ||
+        containsRoot(collapsedLatin, root)
       ) {
         return true;
       }
@@ -182,7 +191,6 @@ function matchesCategory(rawText, category) {
 
     if (
       norm.includes(normPhrase) ||
-      normPhrase.includes(norm) ||
       collapsedNorm.includes(collapsedPhrase) ||
       collapsedLatin.includes(collapsedPhrase) ||
       latinNorm.includes(latinPhrase)
@@ -191,12 +199,6 @@ function matchesCategory(rawText, category) {
     }
 
     const maxDist = category.maxDistance ?? 2;
-    if (Math.abs(collapsedLatin.length - collapsedPhrase.length) <= maxDist) {
-      if (levenshteinDistance(collapsedLatin, collapsedPhrase) <= maxDist) {
-        return true;
-      }
-    }
-
     if (!normPhrase.includes(' ')) {
       const words = collapsedLatin.split(' ');
       for (const word of words) {

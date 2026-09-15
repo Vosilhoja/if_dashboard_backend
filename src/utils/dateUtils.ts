@@ -21,7 +21,12 @@ function parseSheetDate(rawDate) {
 
     if (!isNaN(day) && !isNaN(month) && !isNaN(year)) {
       const date = new Date(year, month, day);
-      if (!isNaN(date.getTime())) {
+      if (
+        !isNaN(date.getTime()) &&
+        date.getFullYear() === year &&
+        date.getMonth() === month &&
+        date.getDate() === day
+      ) {
         return date;
       }
     }
@@ -35,7 +40,12 @@ function parseSheetDate(rawDate) {
     const day = parseInt(dashParts[2], 10);
     if (!isNaN(day) && !isNaN(month) && !isNaN(year)) {
       const date = new Date(year, month, day);
-      if (!isNaN(date.getTime())) {
+      if (
+        !isNaN(date.getTime()) &&
+        date.getFullYear() === year &&
+        date.getMonth() === month &&
+        date.getDate() === day
+      ) {
         return date;
       }
     }
