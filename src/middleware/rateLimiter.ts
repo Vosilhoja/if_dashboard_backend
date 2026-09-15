@@ -3,12 +3,26 @@ const rateLimit = require('express-rate-limit');
 // Общий лимитер для всех API запросов
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 минут
-  max: 300, // максимум 300 запросов с одного IP
+  max: 600, // обычные GET-запросы не должны блокировать общую работу команды
   standardHeaders: true,
   legacyHeaders: false,
   message: {
     status: 'fail',
     error: 'Слишком много запросов с вашего IP-адреса. Повторите попытку позже.'
+  }
+});
+
+// Expensive dashboard aggregations are protected separately from lightweight
+// health/settings requests. This prevents one browser or a shared proxy IP
+// from consuming all backend capacity.
+const dashboardLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    status: 'fail',
+    error: 'Слишком много обновлений дашборда. Подождите немного.'
   }
 });
 
@@ -39,6 +53,7 @@ const aiLimiter = rateLimit({
 
 module.exports = {
   apiLimiter,
+  dashboardLimiter,
   loginLimiter,
   aiLimiter
 };

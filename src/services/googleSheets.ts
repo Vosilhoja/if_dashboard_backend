@@ -12,14 +12,24 @@ const {
   isWrongPersonStatus
 } = require('../utils/statusMatcher');
 
-// Refresh frequently while reusing the same data for concurrent dashboard requests.
-const CACHE_TTL_MS = 30 * 1000;
-const BACKGROUND_REFRESH_MS = 20 * 1000;
+// Keep complete snapshots long enough to avoid repeatedly materializing all
+// Google Sheets rows on a small production instance.
+const CACHE_TTL_MS = 5 * 60 * 1000;
+const BACKGROUND_REFRESH_MS = 5 * 60 * 1000;
 const SHEET_REQUEST_RETRY_LIMIT = 4;
 const SHEET_REQUEST_BACKOFF_BASE_MS = 1000;
 const cache = {};
 const inFlight = {};
 let sheetReadQueue = Promise.resolve();
+let backgroundRefreshInProgress = false;
+const dashboardMetricsCache = new Map();
+const dashboardMetricsInFlight = new Map();
+const MAX_DASHBOARD_METRICS_CACHE_ENTRIES = 32;
+const DASHBOARD_METRICS_CACHE_TTL_MS = 30 * 1000;
+const MIN_FORCED_SHEET_REFRESH_MS = 60 * 1000;
+let dashboardMetricsActive = 0;
+const dashboardMetricsWaiters = [];
+const MAX_DASHBOARD_METRICS_CONCURRENCY = 2;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -93,6 +103,11 @@ async function fetchAllRowsForSheet(type, forceRefresh = false) {
   const cacheKey = `sheet_${type}`;
   const now = Date.now();
 
+  if (forceRefresh && cache[cacheKey] &&
+      now - cache[cacheKey].timestamp < MIN_FORCED_SHEET_REFRESH_MS) {
+    return cache[cacheKey].data;
+  }
+
   if (!forceRefresh && cache[cacheKey]) {
     const age = now - cache[cacheKey].timestamp;
     if (age < CACHE_TTL_MS) {
@@ -129,7 +144,7 @@ async function fetchAllRowsForSheet(type, forceRefresh = false) {
           }
 
           await sheet.loadHeaderRow();
-          const rawRows = await sheet.getRows();
+          let rawRows = await sheet.getRows();
 
           const data = rawRows.map((row) => {
             const obj = {};
@@ -138,6 +153,10 @@ async function fetchAllRowsForSheet(type, forceRefresh = false) {
             }
             return obj;
           });
+          // Release google-spreadsheet row wrappers before storing the
+          // normalized snapshot. This materially lowers the peak heap during
+          // large-sheet refreshes.
+          rawRows = null;
 
           console.log(`[GoogleSheets API] Успешно загружено ${data.length} строк для "${type}"`);
           cache[cacheKey] = { data, timestamp: Date.now() };
@@ -179,9 +198,40 @@ function clearSheetCache() {
   for (const k of Object.keys(cache)) {
     delete cache[k];
   }
+  dashboardMetricsCache.clear();
+}
+
+function getDashboardMetricsCacheKey(query) {
+  return JSON.stringify({
+    startDate: query.startDate || '',
+    endDate: query.endDate || '',
+    anomalyThreshold: query.anomalyThreshold || '',
+    attemptFilter: query.attemptFilter || 'all',
+    attemptRegion: query.attemptRegion || 'all',
+    attemptStatus: query.attemptStatus || 'all',
+  });
+}
+
+async function withDashboardMetricsSlot(task) {
+  if (dashboardMetricsActive >= MAX_DASHBOARD_METRICS_CONCURRENCY) {
+    await new Promise((resolve) => dashboardMetricsWaiters.push(resolve));
+  }
+
+  dashboardMetricsActive += 1;
+  try {
+    return await task();
+  } finally {
+    dashboardMetricsActive -= 1;
+    dashboardMetricsWaiters.shift()?.();
+  }
 }
 
 async function prewarmDataCache() {
+  if (String(process.env.DATA_PREWARM_ENABLED || '').toLowerCase() !== 'true') {
+    console.log('[Data prewarm] Отключен по умолчанию; таблицы загрузятся по первому запросу и будут закэшированы.');
+    return;
+  }
+
   const types = ['main', 'numbers', 'eskiz', 'not_completed', 'survey_attempts'];
   const timeoutMs = Number(process.env.DATA_PREWARM_TIMEOUT_MS || 10_000);
   let timeoutId;
@@ -205,10 +255,26 @@ async function prewarmDataCache() {
 }
 
 function startBackgroundDataRefresh() {
+  if (String(process.env.DATA_BACKGROUND_REFRESH_ENABLED || '').toLowerCase() !== 'true') {
+    console.log('[Data refresh] Фоновое обновление отключено по умолчанию; используйте ручной refresh или включите DATA_BACKGROUND_REFRESH_ENABLED=true.');
+    return null;
+  }
+
   const timer = setInterval(() => {
-    for (const type of ['main', 'numbers', 'eskiz', 'not_completed', 'survey_attempts']) {
-      void refreshSheet(type);
-    }
+    if (backgroundRefreshInProgress) return;
+    backgroundRefreshInProgress = true;
+
+    // Refresh one sheet at a time to avoid holding old and newly materialized
+    // snapshots for every source simultaneously.
+    void (async () => {
+      try {
+        for (const type of ['main', 'numbers', 'eskiz', 'not_completed', 'survey_attempts']) {
+          await refreshSheet(type);
+        }
+      } finally {
+        backgroundRefreshInProgress = false;
+      }
+    })();
   }, BACKGROUND_REFRESH_MS);
   timer.unref?.();
   return timer;
@@ -366,11 +432,17 @@ async function calculateDashboardMetrics(query: any = {}) {
     attemptStatus = 'all',
   } = query;
 
-  if (refresh) {
-    clearSheetCache();
+  const cacheKey = getDashboardMetricsCacheKey(query);
+  const cachedMetrics = dashboardMetricsCache.get(cacheKey);
+  if (!refresh && cachedMetrics && Date.now() - cachedMetrics.timestamp < DASHBOARD_METRICS_CACHE_TTL_MS) {
+    return cachedMetrics.data;
+  }
+  if (dashboardMetricsInFlight.has(cacheKey)) {
+    return dashboardMetricsInFlight.get(cacheKey);
   }
 
-  let mainRows = [];
+  const calculation = withDashboardMetricsSlot(async () => {
+    let mainRows = [];
   let numbersRows = [];
   let eskizRows = [];
   let notCompletedRows = [];
@@ -648,25 +720,28 @@ async function calculateDashboardMetrics(query: any = {}) {
     const calcAnomaly = (current, baseline) => {
       if (baseline === 0) {
         const delta = current > 0 ? 100 : 0;
-        return {
+        const result = {
           current,
           baseline4WeeksAvg: baseline,
           deltaPercent: delta,
           isAnomaly: current > 5,
           direction: current > 0 ? 'up' : 'normal',
         };
+        return result;
       }
+
       const deltaPercent = Math.round(((current - baseline) / baseline) * 100);
       const absDelta = Math.abs(deltaPercent);
       const isAnomaly = absDelta >= anomalyThreshold;
       const direction = deltaPercent > 0 ? 'up' : deltaPercent < 0 ? 'down' : 'normal';
-      return {
+      const result = {
         current,
         baseline4WeeksAvg: baseline,
         deltaPercent,
         isAnomaly,
         direction,
       };
+      return result;
     };
 
     anomalyData = {
@@ -675,7 +750,7 @@ async function calculateDashboardMetrics(query: any = {}) {
     };
   }
 
-  return {
+  const result = {
     callsCount: {
       value: numbersError ? '—' : callsCountVal,
       subtext: numbersError ? undefined : `Всего звонков за выбранный период`,
@@ -771,6 +846,23 @@ async function calculateDashboardMetrics(query: any = {}) {
     anomalyData,
     cachedAt: new Date().toISOString(),
   };
+
+    dashboardMetricsCache.delete(cacheKey);
+    dashboardMetricsCache.set(cacheKey, { data: result, timestamp: Date.now() });
+    while (dashboardMetricsCache.size > MAX_DASHBOARD_METRICS_CACHE_ENTRIES) {
+      dashboardMetricsCache.delete(dashboardMetricsCache.keys().next().value);
+    }
+    return result;
+  });
+
+  dashboardMetricsInFlight.set(cacheKey, calculation);
+  try {
+    return await calculation;
+  } finally {
+    if (dashboardMetricsInFlight.get(cacheKey) === calculation) {
+      dashboardMetricsInFlight.delete(cacheKey);
+    }
+  }
 }
 
 /**

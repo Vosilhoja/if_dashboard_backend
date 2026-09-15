@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const config = require('../config');
+const { dashboardLimiter } = require('../middleware/rateLimiter');
 const { authenticateToken, authorizeRoles } = require('../middleware/auth');
 const {
   calculateDashboardMetrics,
@@ -14,7 +15,7 @@ const { getAnalyticsData } = require('../services/analyticsService');
  * Возвращает реальные посчитанные метрики DashboardMetrics из Google Sheets
  * Query params: startDate, endDate, refresh, anomalyThreshold
  */
-router.get('/', authenticateToken, async (req, res, next) => {
+router.get('/', authenticateToken, dashboardLimiter, async (req, res, next) => {
   try {
     const {
       startDate,
@@ -62,7 +63,7 @@ router.get('/period', authenticateToken, async (req, res, next) => {
  * GET /api/data/analytics
  * Демографическая аналитика и агрегаты (пол, возраст, регионы, образования)
  */
-router.get('/analytics', authenticateToken, async (req, res, next) => {
+router.get('/analytics', authenticateToken, dashboardLimiter, async (req, res, next) => {
   try {
     const { startDate, endDate, refresh } = req.query;
     const analytics = await getAnalyticsData({

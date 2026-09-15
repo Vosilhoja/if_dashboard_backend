@@ -96,12 +96,18 @@ app.use('/api', apiLimiter);
 
 // Health Check / Ping
 app.get('/health', (req, res) => {
+  const memory = process.memoryUsage();
   res.status(200).json({
     status: 'OK',
     timestamp: new Date().toISOString(),
     service: 'HURMO UZ Backend API',
     version: '1.0.0',
-    uptime: process.uptime()
+    uptime: process.uptime(),
+    memory: {
+      rssMb: Math.round(memory.rss / 1024 / 1024),
+      heapUsedMb: Math.round(memory.heapUsed / 1024 / 1024),
+      heapTotalMb: Math.round(memory.heapTotal / 1024 / 1024),
+    },
   });
 });
 
