@@ -34,45 +34,68 @@ const dashboardMetricsWaiters = [];
 // Railway's memory limit with the production-sized sheets.
 const MAX_DASHBOARD_METRICS_CONCURRENCY = 1;
 
+function normalizeHeader(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/ё/g, 'е')
+    .replace(/[^\p{L}\p{N}]+/gu, '');
+}
+
+function getRowValue(row, aliases = [], matcher) {
+  const keys = Object.keys(row || {});
+  const aliasKeys = new Set(aliases.map(normalizeHeader));
+  const exactKey = keys.find((key) => aliasKeys.has(normalizeHeader(key)));
+  if (exactKey) return row[exactKey];
+  const matchedKey = keys.find((key) => matcher && matcher(normalizeHeader(key), key));
+  return matchedKey ? row[matchedKey] : '';
+}
+
 function getCallStatus(row) {
-  const directStatus = String(
-    row['Коментарий'] ||
-    row['Комментарий'] ||
-    row['Статус'] ||
-    row['Status'] ||
-    row['status'] ||
-    row['comment'] ||
-    row['Comment'] ||
-    ''
-  ).trim();
+  const directStatus = String(getRowValue(
+    row,
+    ['Коментарий', 'Комментарий', 'Comment', 'Status comment', 'Результат звонка'],
+    (key) => /(комментар|коментар|comment|результат|result|outcome)/.test(key)
+      && !/(статусзвонка|callstatus)/.test(key)
+  ) || '').trim();
   if (directStatus) return directStatus;
 
   const statusKey = Object.keys(row).find((key) => {
-    const normalized = String(key).toLowerCase();
+    const normalized = normalizeHeader(key);
     return (
-      /(статус|status|comment|коммент|результат|result|итог|outcome|причин)/i.test(normalized) &&
-      !/(дата|date|время|time)/i.test(normalized)
+      /(статус|status|итог|outcome|причин)/.test(normalized) &&
+      !/(статусзвонка|callstatus|дата|date|время|time)/.test(normalized)
     );
   });
   return statusKey ? String(row[statusKey] || '').trim() : '';
 }
 
 function getCallDate(row) {
-  const directDate =
-    row['Дата (формат xx.xx.xxxx)'] ||
-    row['Дата звонка'] ||
-    row['Дата звонка '] ||
-    row['Дата'] ||
-    row['date'] ||
-    row['Date'];
+  const directDate = getRowValue(
+    row,
+    ['Дата (формат xx.xx.xxxx)', 'Дата звонка', 'Дата', 'Date', 'Call date'],
+    (key) => /(дата|date|время|time)/.test(key)
+      && !/(регистрац|регист|registration|register|создан|created)/.test(key)
+  );
   if (directDate) return directDate;
 
-  const dateKeys = Object.keys(row).filter((key) => /(дата|date|time|время)/i.test(String(key)));
+  const dateKeys = Object.keys(row).filter((key) => /(дата|date|time|время)/.test(normalizeHeader(key)));
   const dateKey =
-    dateKeys.find((key) => /(звон|call|обращ|контакт|created|создан)/i.test(String(key))) ||
-    dateKeys.find((key) => !/(регистрац|регист|registration|register)/i.test(String(key))) ||
+    dateKeys.find((key) => /(звон|call|обращ|контакт)/.test(normalizeHeader(key))) ||
+    dateKeys.find((key) => !/(регистрац|регист|registration|register|создан|created)/.test(normalizeHeader(key))) ||
     dateKeys[0];
   return dateKey ? row[dateKey] : '';
+}
+
+function getPhone(row) {
+  return getRowValue(row, ['Телефон', 'Phone', 'phone', 'Номер телефона'], (key) =>
+    /(телефон|phone|номертелефона)/.test(key)
+  );
+}
+
+function getMainRegistrationDate(row) {
+  return getRowValue(row, ['Дата создания', 'Дата регистрации', 'Creation date', 'Registration date', 'Дата', 'Date'], (key) =>
+    /(датасоздания|датарегистрац|creationdate|registrationdate)/.test(key)
+  );
 }
 
 function sleep(ms) {
@@ -333,7 +356,7 @@ function calculateSurveyAttemptMetrics(
   const normalizedStatusFilter = String(attemptStatus || 'all').trim().toLowerCase();
 
   for (const row of rows) {
-    const phone = normalizePhone(row.Phone || row.phone || row['Телефон']);
+    const phone = normalizePhone(getPhone(row));
     const id = String(row.id || row.ID || row['ID пользователя'] || '').trim();
     const identity = phone || id;
     if (!identity) continue;
@@ -506,7 +529,7 @@ async function calculateDashboardMetrics(query: any = {}) {
 
   if (!mainError) {
     for (const row of mainRows) {
-      const rawP = row['Phone'] || row['phone'] || row['Телефон'];
+      const rawP = getPhone(row);
       const diag = normalizePhoneWithDiagnostics(rawP);
       if (diag.status === 'corrupted_scientific') phoneDiagnostics.corrupted++;
       else if (diag.status === 'truncated') phoneDiagnostics.truncated++;
@@ -522,10 +545,10 @@ async function calculateDashboardMetrics(query: any = {}) {
   const mainRegistrationDateByPhone = new Map();
   if (!mainError) {
     for (const row of mainRows) {
-      const dateStr = row['Дата создания'] || row['date'] || row['Дата'];
+      const dateStr = getMainRegistrationDate(row);
       const registrationDate = parseSheetDate(dateStr);
       const phone = normalizePhoneWithDiagnostics(
-        row['Phone'] || row['phone'] || row['Телефон']
+        getPhone(row)
       ).normalized;
       if (!phone || !registrationDate) continue;
 
@@ -541,7 +564,7 @@ async function calculateDashboardMetrics(query: any = {}) {
   const numbersInPeriod = [];
   if (!numbersError) {
     for (const row of numbersRows) {
-      const rawP = row['Телефон'] || row['Phone'];
+      const rawP = getPhone(row);
       const diag = normalizePhoneWithDiagnostics(rawP);
       if (diag.status === 'corrupted_scientific') phoneDiagnostics.corrupted++;
       else if (diag.status === 'truncated') phoneDiagnostics.truncated++;
@@ -561,8 +584,12 @@ async function calculateDashboardMetrics(query: any = {}) {
   let eskizCount = 0;
   if (!eskizError) {
     for (const row of eskizRows) {
-      const dateStr = row['Дата'] || row['Отправлено в'] || row['date'];
-      const status = (row['Статус'] || '').trim().toUpperCase();
+      const dateStr = getRowValue(row, ['Дата', 'Отправлено в', 'Date'], (key) =>
+        /(дата|отправленов|date)/.test(key)
+      );
+      const status = String(getRowValue(row, ['Статус', 'Status'], (key) =>
+        /^(статус|status)$/.test(key)
+      ) || '').trim().toUpperCase();
       const d = parseSheetDate(dateStr);
       if (isDateInRange(d, startDate, endDate) && (status === 'DELIVERED' || status === 'ACCEPTED')) {
         eskizCount++;
@@ -602,7 +629,7 @@ async function calculateDashboardMetrics(query: any = {}) {
   let registeredMainVal = 0;
   if (!mainError) {
     for (const row of mainRows) {
-      const dateStr = row['Дата создания'] || row['date'] || row['Дата'];
+      const dateStr = getMainRegistrationDate(row);
       const d = parseSheetDate(dateStr);
       if (isDateInRange(d, startDate, endDate)) {
         registeredMainVal++;
@@ -614,7 +641,7 @@ async function calculateDashboardMetrics(query: any = {}) {
   const matchedPhonesSupport = new Set();
   if (!numbersError && !mainError) {
     for (const row of numbersInPeriod) {
-      const pDiag = normalizePhoneWithDiagnostics(row['Телефон'] || row['Phone']);
+      const pDiag = normalizePhoneWithDiagnostics(getPhone(row));
       const p = pDiag.normalized;
       const comment = getCallStatus(row);
       const callDate = parseSheetDate(
@@ -644,7 +671,7 @@ async function calculateDashboardMetrics(query: any = {}) {
       if (isAlreadyRegisteredStatus(comment, STATUS_CONFIG.alreadyRegistered)) continue;
 
       repeatStatusesFoundInPeriod++;
-      const p = normalizePhoneWithDiagnostics(row['Телефон'] || row['Phone'] || row['phone']).normalized;
+      const p = normalizePhoneWithDiagnostics(getPhone(row)).normalized;
       const callDate = parseSheetDate(
         getCallDate(row)
       );
@@ -659,12 +686,18 @@ async function calculateDashboardMetrics(query: any = {}) {
   let notCompletedInPeriodCount = 0;
   if (!notCompletedError) {
     for (const row of notCompletedRows) {
-      const status = (row['Статус'] || row['status'] || '').trim().toLowerCase();
+      const status = String(getRowValue(row, ['Статус', 'Status'], (key) =>
+        /^(статус|status)$/.test(key)
+      ) || '').trim().toLowerCase();
       if (status && !status.includes('not completed') && !status.includes('не заверш')) {
         continue;
       }
 
-      const dateStr = row['Дата создания'] || row['Start date'] || row['Дата'] || row['Creation date'] || '';
+      const dateStr = getRowValue(
+        row,
+        ['Дата создания', 'Start date', 'Дата', 'Creation date'],
+        (key) => /(датасоздания|startdate|дата|creationdate)/.test(key)
+      );
       const d = parseSheetDate(dateStr);
       if (isDateInRange(d, startDate, endDate)) {
         notCompletedInPeriodCount++;
@@ -901,22 +934,23 @@ async function getPeriodDetails(startDate = '', endDate = '') {
   ]);
 
   const calls = numbersRows.filter((row) => {
-    const dateStr = row['Дата (формат xx.xx.xxxx)'] || row['Дата'] || row['date'];
+    const dateStr = getCallDate(row);
     const d = parseSheetDate(dateStr);
     return isDateInRange(d, startDate, endDate);
   });
 
   const notCompleted = notCompletedRows.filter((row) => {
-    const status = (row['Статус'] || row['status'] || '').trim().toLowerCase();
+    const status = String(getRowValue(row, ['Статус', 'Status'], (key) =>
+      /^(статус|status)$/.test(key)
+    ) || '').trim().toLowerCase();
     if (status && !status.includes('not completed') && !status.includes('не заверш')) {
       return false;
     }
-    const dateStr =
-      row['Дата создания'] ||
-      row['Start date'] ||
-      row['Дата'] ||
-      row['Creation date'] ||
-      '';
+    const dateStr = getRowValue(
+      row,
+      ['Дата создания', 'Start date', 'Дата', 'Creation date'],
+      (key) => /(датасоздания|startdate|дата|creationdate)/.test(key)
+    );
     const d = parseSheetDate(dateStr);
     return isDateInRange(d, startDate, endDate);
   });
@@ -948,7 +982,7 @@ async function getSheetPaginated(type, page = 1, pageSize = 25, search = '', for
     const searchLower = search.toLowerCase();
 
     filteredRows = allRows.filter((row) => {
-      const phone = row['Phone'] || row['Телефон'] || row['Номер телефона'] || '';
+      const phone = getPhone(row);
       if (phone) {
         const normPhone = normalizePhone(phone);
         if (normPhone.includes(searchNorm) || phone.includes(search)) {
