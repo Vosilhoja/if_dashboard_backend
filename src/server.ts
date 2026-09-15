@@ -15,11 +15,17 @@ const dataRoutes = require('./routes/dataRoutes');
 const aiRoutes = require('./routes/aiRoutes');
 const statsRoutes = require('./routes/statsRoutes');
 const callRoutes = require('./routes/callRoutes');
+const statusRoutes = require('./routes/statusRoutes');
+const statusAdminRoutes = require('./routes/statusAdminRoutes');
 
 // Инициализация Telegram Бота
 const { initTelegramBot } = require('./bot/telegramBot');
 const { prewarmDataCache, startBackgroundDataRefresh } = require('./services/googleSheets');
 const { startCallWorker } = require('./services/worker.service');
+const {
+  startStatusClassifierWorker,
+  startStatusSuggestionScheduler,
+} = require('./services/statusClassificationQueue');
 
 const app = express();
 
@@ -116,6 +122,7 @@ app.use('/api/auth', authRoutes);
 
 // Модуль Управления Ролями и Пользователями (RBAC)
 app.use('/api/admin', roleRoutes);
+app.use('/api/admin', statusAdminRoutes);
 
 // Модуль Данных Дашборда (Google Sheets Metrics, Period Details, CRUD)
 app.use('/api/data', dataRoutes);
@@ -126,6 +133,7 @@ app.use('/api/ai', aiRoutes);
 
 // Модуль Агрегированной Статистики (Weekly, Monthly, Summary с in-memory кешем)
 app.use('/api/stats', statsRoutes);
+app.use('/api/status', statusRoutes);
 
 // 404 & Centralized Error Handlers
 app.use(notFoundHandler);
@@ -152,6 +160,8 @@ async function startServer() {
     // Google Sheets worker is optional at boot: API and health endpoint must
     // remain available while Railway variables are being configured.
     startCallWorker();
+    startStatusClassifierWorker();
+    startStatusSuggestionScheduler();
 
     // Запуск сервера
     app.listen(config.port, '0.0.0.0', () => {

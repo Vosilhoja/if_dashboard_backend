@@ -99,6 +99,29 @@ async function initDatabase() {
 
       CREATE INDEX IF NOT EXISTS idx_ai_chat_messages_user_created
         ON ai_chat_messages (user_id, created_at, id);
+
+      CREATE TABLE IF NOT EXISTS status_classifications (
+        id BIGSERIAL PRIMARY KEY,
+        normalized_text TEXT UNIQUE NOT NULL,
+        category VARCHAR(40) NOT NULL,
+        confidence NUMERIC(4,3) NOT NULL,
+        source VARCHAR(10) NOT NULL CHECK (source IN ('rule', 'ai', 'manual')),
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        hit_count INTEGER NOT NULL DEFAULT 0
+      );
+
+      CREATE TABLE IF NOT EXISTS suggested_phrases (
+        id BIGSERIAL PRIMARY KEY,
+        category VARCHAR(40) NOT NULL,
+        phrase TEXT NOT NULL,
+        occurrences INTEGER NOT NULL DEFAULT 0,
+        status VARCHAR(10) NOT NULL DEFAULT 'pending'
+          CHECK (status IN ('pending', 'approved', 'rejected')),
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (category, phrase)
+      );
     `);
 
     // Заполнение стандартных ролей в PG

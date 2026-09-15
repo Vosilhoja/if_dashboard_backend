@@ -51,9 +51,21 @@ const aiLimiter = rateLimit({
   }
 });
 
+const adminStatusLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    status: 'fail',
+    error: 'Слишком много запусков классификации статусов. Повторите позже.'
+  }
+});
+
 module.exports = {
   apiLimiter,
   dashboardLimiter,
   loginLimiter,
-  aiLimiter
+  aiLimiter,
+  adminStatusLimiter
 };
