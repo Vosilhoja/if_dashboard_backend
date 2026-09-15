@@ -83,9 +83,9 @@ app.use(pinoHttp({
   },
 }));
 
-// 4. Body Parsers с защитой от больших payload
-app.use(express.json({ limit: '10kb' }));
-app.use(express.urlencoded({ extended: true, limit: '10kb' }));
+// 4. Body Parsers: allow realistic dashboard / AI payloads without permitting unbounded uploads.
+app.use(express.json({ limit: config.requestBodyLimit || '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: config.requestBodyLimit || '10mb', parameterLimit: 50000 }));
 
 // 5. Global API Rate Limiter
 app.use('/api', apiLimiter);

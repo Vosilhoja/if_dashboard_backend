@@ -8,8 +8,23 @@ function notFoundHandler(req, res, next) {
 }
 
 function errorHandler(err, req, res, next) {
-  const statusCode = err.statusCode || 500;
-  const status = err.status || 'error';
+  const statusCode = err.statusCode || err.status || 500;
+  const status = statusCode >= 400 && statusCode < 500 ? 'fail' : 'error';
+
+  if (err.type === 'entity.too.large' || statusCode === 413) {
+    return res.status(413).json({
+      status: 'fail',
+      error: 'Запрос слишком большой. Сократите историю диалога или размер данных и повторите попытку.',
+    });
+  }
+
+  const parseError = err as SyntaxError & { status?: number; body?: unknown; type?: string };
+  if (err instanceof SyntaxError && parseError.status === 400 && parseError.body !== undefined) {
+    return res.status(400).json({
+      status: 'fail',
+      error: 'Некорректный JSON в теле запроса.',
+    });
+  }
 
   // Логирование критических ошибок
   if (statusCode === 500) {

@@ -29,7 +29,7 @@ Start with `.env.example`. At minimum:
 | Variable | Purpose |
 |---|---|
 | `JWT_SECRET` | JWT signing secret, at least 32 characters |
-| `ADMIN_PASSWORD` | Initial `super_admin` password, at least 12 characters |
+| `ADMIN_PASSWORD` | Initial `super_admin` password, at least 12 characters (required only when seeding a new account) |
 | `CLIENT_URL` | Allowed frontend origin |
 | `DATABASE_URL` | PostgreSQL connection for persistent users |
 

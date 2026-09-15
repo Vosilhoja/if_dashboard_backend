@@ -25,20 +25,26 @@ function redisConnection() {
   };
 }
 
-export const callQueue = new Queue<CallQueuePayload>(CALL_QUEUE_NAME, {
-  connection: redisConnection(),
-  defaultJobOptions: {
-    attempts: Number(process.env.CALL_QUEUE_ATTEMPTS || 8),
-    backoff: {
-      type: 'exponential',
-      delay: Number(process.env.CALL_QUEUE_RETRY_DELAY_MS || 60_000),
+const callQueue = process.env.REDIS_URL
+  ? new Queue<CallQueuePayload>(CALL_QUEUE_NAME, {
+    connection: redisConnection(),
+    defaultJobOptions: {
+      attempts: Number(process.env.CALL_QUEUE_ATTEMPTS || 8),
+      backoff: {
+        type: 'exponential',
+        delay: Number(process.env.CALL_QUEUE_RETRY_DELAY_MS || 60_000),
+      },
+      removeOnComplete: 1_000,
+      removeOnFail: 5_000,
     },
-    removeOnComplete: 1_000,
-    removeOnFail: 5_000,
-  },
-});
+    })
+  : null;
 
 export async function enqueueCall(payload: CallQueuePayload) {
+  if (!callQueue) {
+    throw new Error('Очередь звонков недоступна: REDIS_URL не настроен.');
+  }
+
   const job = await callQueue.add('append-call', payload, {
     jobId: payload.idempotencyKey || undefined,
   });

@@ -6,6 +6,13 @@ const config = require('../config');
  * Создаются защищенные учетные записи с хешированными паролями через bcrypt
  */
 async function seedDefaultUsers() {
+  if (!config.auth.adminPassword) {
+    console.warn(
+      '⚠️ [Seed] ADMIN_PASSWORD не задан. Стандартный аккаунт не создается; существующие аккаунты PostgreSQL доступны.'
+    );
+    return;
+  }
+
   const defaultAccounts = [
     {
       username: config.auth.adminUsername,
