@@ -35,7 +35,7 @@ const dashboardMetricsWaiters = [];
 const MAX_DASHBOARD_METRICS_CONCURRENCY = 1;
 
 function getCallStatus(row) {
-  return String(
+  const directStatus = String(
     row['Коментарий'] ||
     row['Комментарий'] ||
     row['Статус'] ||
@@ -45,6 +45,34 @@ function getCallStatus(row) {
     row['Comment'] ||
     ''
   ).trim();
+  if (directStatus) return directStatus;
+
+  const statusKey = Object.keys(row).find((key) => {
+    const normalized = String(key).toLowerCase();
+    return (
+      /(статус|status|comment|коммент|результат|result|итог|outcome|причин)/i.test(normalized) &&
+      !/(дата|date|время|time)/i.test(normalized)
+    );
+  });
+  return statusKey ? String(row[statusKey] || '').trim() : '';
+}
+
+function getCallDate(row) {
+  const directDate =
+    row['Дата (формат xx.xx.xxxx)'] ||
+    row['Дата звонка'] ||
+    row['Дата звонка '] ||
+    row['Дата'] ||
+    row['date'] ||
+    row['Date'];
+  if (directDate) return directDate;
+
+  const dateKeys = Object.keys(row).filter((key) => /(дата|date|time|время)/i.test(String(key)));
+  const dateKey =
+    dateKeys.find((key) => /(звон|call|обращ|контакт|created|создан)/i.test(String(key))) ||
+    dateKeys.find((key) => !/(регистрац|регист|registration|register)/i.test(String(key))) ||
+    dateKeys[0];
+  return dateKey ? row[dateKey] : '';
 }
 
 function sleep(ms) {
@@ -520,7 +548,7 @@ async function calculateDashboardMetrics(query: any = {}) {
       else if (diag.status === 'invalid') phoneDiagnostics.invalid++;
       else if (diag.status === 'foreign') phoneDiagnostics.foreign++;
 
-      const dateStr = row['Дата (формат xx.xx.xxxx)'] || row['Дата'] || row['date'];
+      const dateStr = getCallDate(row);
       const d = parseSheetDate(dateStr);
       if (isDateInRange(d, startDate, endDate)) {
         callsCountVal++;
@@ -590,7 +618,7 @@ async function calculateDashboardMetrics(query: any = {}) {
       const p = pDiag.normalized;
       const comment = getCallStatus(row);
       const callDate = parseSheetDate(
-        row['Дата (формат xx.xx.xxxx)'] || row['Дата'] || row['date']
+        getCallDate(row)
       );
       const registrationDate = p ? mainRegistrationDateByPhone.get(p) : undefined;
       if (
@@ -618,7 +646,7 @@ async function calculateDashboardMetrics(query: any = {}) {
       repeatStatusesFoundInPeriod++;
       const p = normalizePhoneWithDiagnostics(row['Телефон'] || row['Phone'] || row['phone']).normalized;
       const callDate = parseSheetDate(
-        row['Дата (формат xx.xx.xxxx)'] || row['Дата'] || row['date'] || row['Дата звонка']
+        getCallDate(row)
       );
       const registrationDate = p ? mainRegistrationDateByPhone.get(p) : undefined;
       if (p && callDate && registrationDate && registrationDate >= callDate) {
@@ -668,7 +696,7 @@ async function calculateDashboardMetrics(query: any = {}) {
       let wDeclined = 0;
 
       for (const row of numbersRows) {
-        const dateStr = row['Дата (формат xx.xx.xxxx)'] || row['Дата'] || row['date'];
+        const dateStr = getCallDate(row);
         const d = parseSheetDate(dateStr);
         if (d && d >= wStart && d <= wEnd && activeDaysOfWeek.has(d.getDay())) {
           wCalls++;
