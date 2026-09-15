@@ -1,6 +1,20 @@
 /**
  * Status matcher and config for call-center outcomes
  */
+const fs = require('fs');
+const path = require('path');
+
+const learnedPhrasesPath = path.join(process.cwd(), 'src', 'config', 'learned-phrases.json');
+
+function getLearnedPhrases(categoryId) {
+  try {
+    const dictionary = JSON.parse(fs.readFileSync(learnedPhrasesPath, 'utf8'));
+    return Array.isArray(dictionary[categoryId]) ? dictionary[categoryId] : [];
+  } catch (error) {
+    console.warn('[StatusMatcher] Не удалось загрузить learned-phrases.json:', error.message || error);
+    return [];
+  }
+}
 
 const STATUS_CONFIG = {
   linkSent: {
@@ -194,6 +208,18 @@ function matchesCategory(rawText, category) {
   const latinNorm = transliterateCyrillicToLatin(norm);
   const collapsedNorm = collapseRepeatedChars(norm);
   const collapsedLatin = collapseRepeatedChars(latinNorm);
+
+  const learnedPhrases = getLearnedPhrases(category.id);
+  if (learnedPhrases.some((phrase) => {
+    const normalizedPhrase = normalizeText(phrase);
+    return normalizedPhrase && (
+      norm.includes(normalizedPhrase) ||
+      collapsedNorm.includes(collapseRepeatedChars(normalizedPhrase)) ||
+      latinNorm.includes(transliterateCyrillicToLatin(normalizedPhrase))
+    );
+  })) {
+    return true;
+  }
 
   const semanticRoots = SEMANTIC_CATEGORY_ROOTS[category.id];
   if (semanticRoots) {

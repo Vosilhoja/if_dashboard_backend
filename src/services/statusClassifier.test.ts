@@ -33,3 +33,24 @@ test('low confidence AI result becomes unknown', async () => {
   assert.equal(result.category, 'unknown');
   assert.equal(result.confidence, 0.4);
 });
+
+test('approved learned phrase is used by the rule engine', async () => {
+  const fs = require('fs');
+  const path = require('path');
+  const filePath = path.join(process.cwd(), 'src', 'config', 'learned-phrases.json');
+  const original = fs.readFileSync(filePath, 'utf8');
+  try {
+    fs.writeFileSync(filePath, JSON.stringify({
+      link_sent: ['approved custom phrase'],
+      repeat_sent: [],
+      declined: [],
+      already_registered: [],
+      wrong_person: [],
+    }));
+    const result = await classifier.classifyStatus('approved custom phrase');
+    assert.equal(result.category, 'link_sent');
+    assert.equal(result.source, 'rule');
+  } finally {
+    fs.writeFileSync(filePath, original);
+  }
+});
