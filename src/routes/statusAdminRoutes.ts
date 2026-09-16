@@ -20,6 +20,7 @@ router.get('/statuses/suggestions', authenticateToken, authorizeRoles('super_adm
       source: 'google_sheets',
       sheet: 'numbers',
       commentColumn: 'Коментарий (D)',
+      dataMode: 'live_after_sync',
       suggestions: await listPendingSuggestions(req.query.fresh === 'true'),
     });
   } catch (error) {

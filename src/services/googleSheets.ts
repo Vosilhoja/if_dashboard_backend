@@ -49,7 +49,20 @@ function getRowValue(row, aliases = [], matcher) {
   return matchedKey ? row[matchedKey] : '';
 }
 
+/**
+ * The call outcome is stored in column D of the numbers sheet.
+ * Row objects preserve the sheet header order, so index 3 is the
+ * source-of-truth value immediately after a forced synchronization.
+ */
+function getColumnDText(row) {
+  const value = Object.values(row || {})[3];
+  return String(value ?? '').trim().replace(/\s+/g, ' ');
+}
+
 function getCallStatus(row) {
+  const columnDStatus = getColumnDText(row);
+  if (columnDStatus) return columnDStatus;
+
   const directStatus = String(getRowValue(
     row,
     ['Коментарий', 'Комментарий', 'Comment', 'Status comment', 'Результат звонка'],
@@ -1217,6 +1230,7 @@ async function getSheetPaginated(type, page = 1, pageSize = 25, search = '', for
 module.exports = {
   fetchAllRowsForSheet,
   fetchNewRowsForSheet,
+  getColumnDText,
   clearSheetCache,
   withDashboardMetricsSlot,
   prewarmDataCache,

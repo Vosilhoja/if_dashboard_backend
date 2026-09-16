@@ -1,20 +1,22 @@
 const { query, isPgConnected } = require('../db');
 const { updateLearnedPhrase } = require('../utils/statusMatcher');
-const { fetchAllRowsForSheet } = require('./googleSheets');
+const { fetchAllRowsForSheet, getColumnDText } = require('./googleSheets');
 const { STATUS_CONFIG, matchesCategory } = require('../utils/statusMatcher');
 const config = require('../config');
 let liveScanInFlight = null;
 let lastLiveScanAt = 0;
 
 function getCommentText(row) {
+  const columnD = getColumnDText(row);
+  if (columnD) return columnD;
+
   const entry = Object.entries(row || {}).find(([key]) =>
     /^(коментарий|комментарий|comment|status comment|результат звонка)$/i.test(String(key).trim())
   ) || Object.entries(row || {}).find(([key]) =>
     /(комментар|коментар|comment|результат|result|outcome)/i.test(String(key))
       && !/(статус.?звонка|call.?status)/i.test(String(key))
   );
-  const columnD = Object.values(row || {})[3];
-  const text = String(entry?.[1] || columnD || '').trim().replace(/\s+/g, ' ');
+  const text = String(entry?.[1] || '').trim().replace(/\s+/g, ' ');
   return text || '';
 }
 

@@ -1,6 +1,6 @@
 const { Queue, Worker } = require('bullmq');
 const config = require('../config');
-const { fetchAllRowsForSheet } = require('./googleSheets');
+const { fetchAllRowsForSheet, getColumnDText } = require('./googleSheets');
 const { classifyBatch } = require('./statusClassifier');
 const { createSuggestions } = require('./statusSuggestionService');
 const { STATUS_CONFIG, matchesCategory } = require('../utils/statusMatcher');
@@ -31,6 +31,9 @@ const queue = enabled
 let enqueueInFlight = null;
 
 function statusText(row) {
+  const columnD = getColumnDText(row);
+  if (columnD) return columnD;
+
   const entries = Object.entries(row || {});
   const commentEntry = entries.find(([key]) =>
     /^(коментарий|комментарий|comment|status comment|результат звонка)$/i.test(String(key).trim())
@@ -39,8 +42,7 @@ function statusText(row) {
       && !/(статус.?звонка|call.?status)/i.test(String(key))
   );
 
-  const columnD = Object.values(row || {})[3];
-  const comment = String(commentEntry?.[1] || columnD || '').trim();
+  const comment = String(commentEntry?.[1] || '').trim();
   if (comment) return comment;
 
   // The numeric value in "Статус звонка" is a code, not a phrase.
