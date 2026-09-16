@@ -247,7 +247,9 @@ async function fetchAllRowsForSheet(type, forceRefresh = false) {
           rawRows = null;
 
           console.log(`[GoogleSheets API] Успешно загружено ${data.length} строк для "${type}"`);
+          const oldData = cache[cacheKey]?.data;
           cache[cacheKey] = { data, timestamp: Date.now() };
+          if (oldData) oldData.length = 0;
           return data;
         });
       } catch (err) {
@@ -587,38 +589,34 @@ async function calculateDashboardMetrics(query: any = {}) {
   let notCompletedError = null;
   let surveyAttemptsError = null;
 
-  await Promise.all([
-    fetchAllRowsForSheet('main', refresh)
-      .then((res) => { mainRows = res; })
-      .catch((err) => {
-        console.error('Ошибка загрузки main_base:', err.message);
-        mainError = err.message || 'Ошибка загрузки main_base';
-      }),
-    fetchAllRowsForSheet('numbers', refresh)
-      .then((res) => { numbersRows = res; })
-      .catch((err) => {
-        console.error('Ошибка загрузки numbers:', err.message);
-        numbersError = err.message || 'Ошибка загрузки numbers';
-      }),
-    fetchAllRowsForSheet('eskiz', refresh)
-      .then((res) => { eskizRows = res; })
-      .catch((err) => {
-        console.error('Ошибка загрузки eskiz:', err.message);
-        eskizError = err.message || 'Ошибка загрузки eskiz';
-      }),
-    fetchAllRowsForSheet('not_completed', refresh)
-      .then((res) => { notCompletedRows = res; })
-      .catch((err) => {
-        console.error('Ошибка загрузки not_completed:', err.message);
-        notCompletedError = err.message || 'Ошибка загрузки not_completed';
-      }),
-    fetchAllRowsForSheet('survey_attempts', refresh)
-      .then((res) => { surveyAttemptRows = res; })
-      .catch((err) => {
-        console.error('Ошибка загрузки survey_attempts:', err.message);
-        surveyAttemptsError = err.message || 'Ошибка загрузки survey_attempts';
-      }),
-  ]);
+  const loadSheet = async (type, assignRows, assignError) => {
+    try {
+      assignRows(await fetchAllRowsForSheet(type, refresh));
+    } catch (err) {
+      console.error(`Ошибка загрузки ${type === 'main' ? 'main_base' : type}:`, err.message);
+      assignError(err.message || `Ошибка загрузки ${type}`);
+    }
+  };
+
+  if (refresh) {
+    for (const [type, assignRows, assignError] of [
+      ['main', (rows) => { mainRows = rows; }, (error) => { mainError = error; }],
+      ['numbers', (rows) => { numbersRows = rows; }, (error) => { numbersError = error; }],
+      ['eskiz', (rows) => { eskizRows = rows; }, (error) => { eskizError = error; }],
+      ['not_completed', (rows) => { notCompletedRows = rows; }, (error) => { notCompletedError = error; }],
+      ['survey_attempts', (rows) => { surveyAttemptRows = rows; }, (error) => { surveyAttemptsError = error; }],
+    ]) {
+      await loadSheet(type, assignRows, assignError);
+    }
+  } else {
+    await Promise.all([
+      loadSheet('main', (rows) => { mainRows = rows; }, (error) => { mainError = error; }),
+      loadSheet('numbers', (rows) => { numbersRows = rows; }, (error) => { numbersError = error; }),
+      loadSheet('eskiz', (rows) => { eskizRows = rows; }, (error) => { eskizError = error; }),
+      loadSheet('not_completed', (rows) => { notCompletedRows = rows; }, (error) => { notCompletedError = error; }),
+      loadSheet('survey_attempts', (rows) => { surveyAttemptRows = rows; }, (error) => { surveyAttemptsError = error; }),
+    ]);
+  }
 
   const surveyAttemptDetails = surveyAttemptsError
     ? null
