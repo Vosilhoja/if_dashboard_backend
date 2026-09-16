@@ -1,6 +1,6 @@
 const { Queue, Worker } = require('bullmq');
 const config = require('../config');
-const { fetchAllRowsForSheet } = require('./googleSheets');
+const { fetchNewRowsForSheet } = require('./googleSheets');
 const { classifyBatch } = require('./statusClassifier');
 const { createSuggestions } = require('./statusSuggestionService');
 
@@ -26,6 +26,7 @@ const queue = enabled
     },
   })
   : null;
+let enqueueInFlight = null;
 
 function statusText(row) {
   return String(
@@ -36,10 +37,20 @@ function statusText(row) {
 
 async function enqueueUnmatchedClassification() {
   if (!queue) throw new Error('REDIS_URL не настроен');
-  const rows = await fetchAllRowsForSheet('numbers', true);
-  const texts = [...new Set(rows.map(statusText).filter(Boolean))];
-  const job = await queue.add('classify-unmatched', { texts }, { jobId: `status-${Date.now()}` });
-  return { jobId: job.id, uniqueTexts: texts.length };
+  if (enqueueInFlight) return enqueueInFlight;
+
+  enqueueInFlight = (async () => {
+    const { rows } = await fetchNewRowsForSheet('numbers');
+    const texts = [...new Set(rows.map(statusText).filter(Boolean))];
+    const job = await queue.add('classify-unmatched', { texts }, { jobId: `status-${Date.now()}` });
+    return { jobId: job.id, uniqueTexts: texts.length };
+  })();
+
+  try {
+    return await enqueueInFlight;
+  } finally {
+    enqueueInFlight = null;
+  }
 }
 
 async function getClassificationJobStatus(jobId) {

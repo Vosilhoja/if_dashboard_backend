@@ -26,7 +26,6 @@ const dashboardMetricsCache = new Map();
 const dashboardMetricsInFlight = new Map();
 const MAX_DASHBOARD_METRICS_CACHE_ENTRIES = 32;
 const DASHBOARD_METRICS_CACHE_TTL_MS = 60 * 1000;
-const MIN_FORCED_SHEET_REFRESH_MS = 60 * 1000;
 let dashboardMetricsActive = 0;
 const dashboardMetricsWaiters = [];
 // A metrics calculation keeps several large sheet snapshots alive while it
@@ -198,11 +197,6 @@ async function fetchAllRowsForSheet(type, forceRefresh = false) {
   const cacheKey = `sheet_${type}`;
   const now = Date.now();
 
-  if (forceRefresh && cache[cacheKey] &&
-      now - cache[cacheKey].timestamp < MIN_FORCED_SHEET_REFRESH_MS) {
-    return cache[cacheKey].data;
-  }
-
   if (!forceRefresh && cache[cacheKey]) {
     const age = now - cache[cacheKey].timestamp;
     if (age < CACHE_TTL_MS) {
@@ -278,6 +272,39 @@ async function fetchAllRowsForSheet(type, forceRefresh = false) {
   } finally {
     delete inFlight[cacheKey];
   }
+}
+
+async function fetchNewRowsForSheet(type) {
+  const cacheKey = `sheet_${type}`;
+  const existing = cache[cacheKey]?.data || [];
+  if (!existing.length) {
+    const rows = await fetchAllRowsForSheet(type, true);
+    return { rows, isInitial: true };
+  }
+
+  const auth = getJwtClient();
+  const sheetId = getSheetId(type);
+  const doc = new GoogleSpreadsheet(sheetId, auth);
+  await doc.loadInfo();
+  let sheet = doc.sheetsByIndex[0];
+  if (type === 'numbers_repeat') {
+    sheet = doc.sheetsByTitle['Повторные'] || doc.sheetsByTitle['повторные'] || doc.sheetsByIndex[1] || sheet;
+  }
+  await sheet.loadHeaderRow();
+  const newRawRows = await sheet.getRows({ offset: existing.length });
+  const rows = newRawRows.map((row) => {
+    const item = {};
+    for (const header of sheet.headerValues || []) item[header] = row.get(header) ?? '';
+    return item;
+  });
+
+  if (rows.length > 0) {
+    cache[cacheKey] = { data: existing.concat(rows), timestamp: Date.now() };
+  } else {
+    cache[cacheKey].timestamp = Date.now();
+  }
+  console.log(`[GoogleSheets API] Загружено новых строк для "${type}": ${rows.length}`);
+  return { rows, isInitial: false };
 }
 
 async function refreshSheet(type) {
@@ -1073,6 +1100,7 @@ async function getSheetPaginated(type, page = 1, pageSize = 25, search = '', for
 
 module.exports = {
   fetchAllRowsForSheet,
+  fetchNewRowsForSheet,
   clearSheetCache,
   withDashboardMetricsSlot,
   prewarmDataCache,
