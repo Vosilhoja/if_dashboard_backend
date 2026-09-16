@@ -3,7 +3,7 @@ const router = express.Router();
 const { authenticateToken, authorizeRoles } = require('../middleware/auth');
 const { adminStatusLimiter } = require('../middleware/rateLimiter');
 const { enqueueUnmatchedClassification } = require('../services/statusClassificationQueue');
-const { approveSuggestion } = require('../services/statusSuggestionService');
+const { approveSuggestion, listPendingSuggestions, assignSuggestion } = require('../services/statusSuggestionService');
 const {
   getEditableStatusCategories,
   updateLearnedPhrase,
@@ -12,6 +12,14 @@ const {
 
 router.get('/statuses', authenticateToken, authorizeRoles('super_admin', 'admin'), (req, res) => {
   return res.json({ categories: getEditableStatusCategories() });
+});
+
+router.get('/statuses/suggestions', authenticateToken, authorizeRoles('super_admin', 'admin'), async (req, res, next) => {
+  try {
+    return res.json({ suggestions: await listPendingSuggestions() });
+  } catch (error) {
+    next(error);
+  }
 });
 
 router.post('/statuses/phrases', authenticateToken, authorizeRoles('super_admin', 'admin'), async (req, res, next) => {
@@ -58,6 +66,16 @@ router.post('/classify-unmatched', authenticateToken, authorizeRoles('super_admi
 router.post('/suggested-phrases/:id/approve', authenticateToken, authorizeRoles('super_admin', 'admin'), async (req, res, next) => {
   try {
     const result = await approveSuggestion(req.params.id);
+    if (!result) return res.status(404).json({ error: 'Предложение не найдено или уже обработано' });
+    return res.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/suggested-phrases/:id/assign', authenticateToken, authorizeRoles('super_admin', 'admin'), async (req, res, next) => {
+  try {
+    const result = await assignSuggestion(req.params.id, req.body?.category);
     if (!result) return res.status(404).json({ error: 'Предложение не найдено или уже обработано' });
     return res.json(result);
   } catch (error) {

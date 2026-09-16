@@ -7,10 +7,10 @@ async function createSuggestions() {
   const result = await query(`
     SELECT category, normalized_text AS phrase, hit_count AS occurrences
     FROM status_classifications sc
-    WHERE source = 'ai' AND confidence > 0.85 AND hit_count >= 3
+    WHERE category = 'unknown' AND hit_count >= 1
       AND NOT EXISTS (
         SELECT 1 FROM suggested_phrases sp
-        WHERE sp.category = sc.category AND sp.phrase = sc.normalized_text
+        WHERE sp.phrase = sc.normalized_text
       )
     ORDER BY hit_count DESC
   `);
@@ -56,4 +56,43 @@ async function approveSuggestion(id) {
   return suggestion;
 }
 
-module.exports = { createSuggestions, approveSuggestion };
+async function listPendingSuggestions() {
+  if (!isPgConnected()) return [];
+  const result = await query(
+    `SELECT id, phrase, occurrences, created_at
+     FROM suggested_phrases
+     WHERE status = 'pending'
+     ORDER BY occurrences DESC, created_at DESC`
+  );
+  return result.rows;
+}
+
+async function assignSuggestion(id, category) {
+  if (!isPgConnected()) throw new Error('PostgreSQL не подключен');
+  const allowed = ['link_sent', 'repeat_sent', 'declined', 'already_registered', 'wrong_person'];
+  if (!allowed.includes(category)) throw new Error('Недопустимая категория статуса');
+  const result = await query(
+    `SELECT id, phrase, occurrences
+     FROM suggested_phrases
+     WHERE id = $1 AND status = 'pending'`,
+    [id]
+  );
+  const suggestion = result.rows[0];
+  if (!suggestion) return null;
+  await updateLearnedPhrase(category, suggestion.phrase, 'add');
+  await query(
+    `UPDATE suggested_phrases
+     SET category = $2, status = 'approved', updated_at = CURRENT_TIMESTAMP
+     WHERE id = $1 AND status = 'pending'`,
+    [id, category]
+  );
+  await query(
+    `UPDATE status_classifications
+     SET category = $2, confidence = 1, source = 'manual', updated_at = CURRENT_TIMESTAMP
+     WHERE normalized_text = $1`,
+    [suggestion.phrase, category]
+  );
+  return { ...suggestion, category, status: 'approved' };
+}
+
+module.exports = { createSuggestions, approveSuggestion, listPendingSuggestions, assignSuggestion };
