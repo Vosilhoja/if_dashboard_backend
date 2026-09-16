@@ -570,7 +570,7 @@ async function calculateDashboardMetrics(query: any = {}) {
   // телефона: даты нужны для строгой метрики повторных звонков.
   const mainRegistrationsByPhone = new Map();
   const mainPhones = new Set();
-  const botRegistrationPhones = new Set();
+  const mainHasNonBotRegistration = new Set();
   if (!mainError) {
     for (const row of mainRows) {
       const dateStr = getMainRegistrationDate(row);
@@ -580,8 +580,8 @@ async function calculateDashboardMetrics(query: any = {}) {
       ).normalized;
       if (!phone) continue;
       mainPhones.add(phone);
-      if (isBotRegistrationSource(getMainRegistrationSource(row))) {
-        botRegistrationPhones.add(phone);
+      if (!isBotRegistrationSource(getMainRegistrationSource(row))) {
+        mainHasNonBotRegistration.add(phone);
       }
       if (!registrationDate) continue;
 
@@ -691,7 +691,7 @@ async function calculateDashboardMetrics(query: any = {}) {
       if (
         p &&
         mainPhones.has(p) &&
-        !botRegistrationPhones.has(p) &&
+        mainHasNonBotRegistration.has(p) &&
         !isAlreadyRegisteredStatus(comment, STATUS_CONFIG.alreadyRegistered) &&
         !isWrongPersonStatus(comment, STATUS_CONFIG.wrongPerson)
       ) {
