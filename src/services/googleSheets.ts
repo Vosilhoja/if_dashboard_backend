@@ -679,26 +679,7 @@ async function calculateDashboardMetrics(query: any = {}) {
     registeredMainVal = registeredPeopleInPeriod.size;
   }
 
-  // Метрика 4: все зарегистрированные пользователи, которым звонила поддержка.
-  // Статус оператора не фильтрует эту метрику: `o'tdi`, `bot bor` и похожие
-  // отметки относятся к отдельному показателю alreadyRegisteredCount.
-  const supportAttributionDiagnostics = {
-    matchedByCleanStatus: 0,
-    matchedByDateHeuristic: 0,
-    excludedPreExisting: 0,
-    excludedAmbiguousNoRegDate: 0,
-  };
-  const calledUniquePhones = new Set(
-    numbersInPeriod
-      .map((row) => normalizePhoneWithDiagnostics(getPhone(row)).normalized)
-      .filter(Boolean)
-  );
-  const matchedPhonesSupport = new Set(
-    [...calledUniquePhones].filter((phone) => mainPhones.has(phone))
-  );
-  supportAttributionDiagnostics.matchedByCleanStatus = matchedPhonesSupport.size;
-
-  // Метрика 5: Зарегистрировано после повторной ссылки
+  // Метрика 4: пользователи после повторного звонка.
   let repeatStatusesFoundInPeriod = 0;
   const matchedRepeatPhones = new Set();
   const periodEnd = parseSheetDate(endDate);
@@ -724,6 +705,30 @@ async function calculateDashboardMetrics(query: any = {}) {
       }
     }
   }
+
+  // Метрика 5: от поддержки.
+  // Категории взаимоисключающие: пользователи после повторного звонка
+  // и явно уже зарегистрированные через бот считаются только в своих карточках.
+  const calledUniquePhones = new Set(
+    numbersInPeriod
+      .map((row) => normalizePhoneWithDiagnostics(getPhone(row)).normalized)
+      .filter(Boolean)
+  );
+  const botRegisteredPhones = new Set(
+    numbersInPeriod
+      .filter((row) => /\bbot\s+bor\b/i.test(String(getCallStatus(row) || '').trim()))
+      .map((row) => normalizePhoneWithDiagnostics(getPhone(row)).normalized)
+      .filter(Boolean)
+  );
+  const supportExcludedPhones = new Set([
+    ...matchedRepeatPhones,
+    ...botRegisteredPhones,
+  ]);
+  const matchedPhonesSupport = new Set(
+    [...calledUniquePhones].filter(
+      (phone) => mainPhones.has(phone) && !supportExcludedPhones.has(phone)
+    )
+  );
 
   // Метрика 9: Не завершили регистрацию
   const notCompletedPeopleInPeriod = new Set();
@@ -862,8 +867,9 @@ async function calculateDashboardMetrics(query: any = {}) {
         ? undefined
         : `Уникальные зарегистрированные пользователи из ${calledUniquePhones.size.toLocaleString('ru-RU')} номеров`,
       diagnostics: (numbersError || mainError) ? undefined : {
-        ...supportAttributionDiagnostics,
         unknownSourceCount: mainHasUnknownSourceRegistration.size,
+        excludedRepeatCount: matchedRepeatPhones.size,
+        excludedBotRegisteredCount: botRegisteredPhones.size,
       },
       error: (numbersError || mainError) || undefined,
     },
