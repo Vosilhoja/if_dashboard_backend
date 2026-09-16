@@ -1,6 +1,57 @@
 const { query, isPgConnected } = require('../db');
 const { updateLearnedPhrase } = require('../utils/statusMatcher');
+const { fetchAllRowsForSheet } = require('./googleSheets');
+const { STATUS_CONFIG, matchesCategory } = require('../utils/statusMatcher');
 const config = require('../config');
+let liveScanInFlight = null;
+let lastLiveScanAt = 0;
+
+function getCommentText(row) {
+  const entry = Object.entries(row || {}).find(([key]) =>
+    /^(коментарий|комментарий|comment|status comment|результат звонка)$/i.test(String(key).trim())
+  ) || Object.entries(row || {}).find(([key]) =>
+    /(комментар|коментар|comment|результат|result|outcome)/i.test(String(key))
+      && !/(статус.?звонка|call.?status)/i.test(String(key))
+  );
+  const text = String(entry?.[1] ?? '').trim().replace(/\s+/g, ' ');
+  return text || '';
+}
+
+async function materializeLiveUnknownSuggestions() {
+  if (!isPgConnected()) return;
+  if (liveScanInFlight) return liveScanInFlight;
+  if (Date.now() - lastLiveScanAt < 30_000) return;
+
+  liveScanInFlight = (async () => {
+    const rows = await fetchAllRowsForSheet('numbers', false);
+    const categories = Object.values(STATUS_CONFIG as Record<string, any>)
+      .filter((category) => category?.id && category?.phrases);
+    const counts = new Map();
+    for (const row of rows) {
+      const text = getCommentText(row);
+      if (!text || /^\d+$/.test(text) || categories.some((category) => matchesCategory(text, category))) continue;
+      counts.set(text, (counts.get(text) || 0) + 1);
+    }
+
+    for (const [phrase, occurrences] of counts) {
+      await query(
+        `INSERT INTO suggested_phrases (category, phrase, occurrences)
+         VALUES ('unknown', $1, $2)
+         ON CONFLICT (category, phrase) DO UPDATE
+           SET occurrences = GREATEST(suggested_phrases.occurrences, EXCLUDED.occurrences),
+               updated_at = CURRENT_TIMESTAMP`,
+        [phrase, occurrences]
+      );
+    }
+    lastLiveScanAt = Date.now();
+  })();
+
+  try {
+    await liveScanInFlight;
+  } finally {
+    liveScanInFlight = null;
+  }
+}
 
 async function createSuggestions() {
   if (!isPgConnected()) return [];
@@ -58,6 +109,7 @@ async function approveSuggestion(id) {
 
 async function listPendingSuggestions() {
   if (!isPgConnected()) return [];
+  await materializeLiveUnknownSuggestions();
   // A queued classification may finish after the worker's finalization step
   // or after a process restart. Materialize unknown classifications on read
   // so the admin UI cannot miss a valid suggestion.
