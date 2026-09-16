@@ -122,6 +122,18 @@ async function initDatabase() {
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
         UNIQUE (category, phrase)
       );
+
+      CREATE TABLE IF NOT EXISTS learned_phrases (
+        id SERIAL PRIMARY KEY,
+        category_id VARCHAR(40) NOT NULL,
+        phrase TEXT NOT NULL,
+        is_disabled BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (category_id, phrase)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_learned_phrases_category
+        ON learned_phrases (category_id);
     `);
 
     // Заполнение стандартных ролей в PG

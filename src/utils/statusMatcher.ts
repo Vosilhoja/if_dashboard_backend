@@ -3,8 +3,10 @@
  */
 const fs = require('fs');
 const path = require('path');
+const { pool, isPgConnected } = require('../db');
 
 const learnedPhrasesPath = path.join(process.cwd(), 'src', 'config', 'learned-phrases.json');
+let learnedCache = { byCategory: new Map(), disabled: new Map(), loadedAt: 0 };
 
 function getLearnedPhrases(categoryId) {
   try {
@@ -25,10 +27,35 @@ function readLearnedDictionary() {
   }
 }
 
+async function loadLearnedPhrasesFromDb() {
+  if (!isPgConnected() || !pool) return false;
+  const result = await pool.query('SELECT category_id, phrase, is_disabled FROM learned_phrases');
+  const byCategory = new Map();
+  const disabled = new Map();
+  for (const row of result.rows) {
+    if (row.is_disabled) {
+      if (!disabled.has(row.category_id)) disabled.set(row.category_id, new Set());
+      disabled.get(row.category_id).add(String(row.phrase).toLowerCase());
+    } else {
+      if (!byCategory.has(row.category_id)) byCategory.set(row.category_id, []);
+      byCategory.get(row.category_id).push(row.phrase);
+    }
+  }
+  learnedCache = { byCategory, disabled, loadedAt: Date.now() };
+  return true;
+}
+
 /**
  * @param {{id: string, phrases: string[]}} category
  */
 function getStatusPhrases(category) {
+  if (isPgConnected()) {
+    const disabled = learnedCache.disabled.get(category.id) || new Set();
+    return [
+      ...category.phrases.filter((phrase) => !disabled.has(String(phrase).toLowerCase())),
+      ...(learnedCache.byCategory.get(category.id) || []),
+    ];
+  }
   const dictionary = readLearnedDictionary();
   const disabled = Array.isArray(dictionary._disabled?.[category.id])
     ? dictionary._disabled[category.id]
@@ -62,13 +89,40 @@ function getEditableStatusCategories() {
   }, []);
 }
 
-function updateLearnedPhrase(categoryId, phrase, action = 'add') {
+async function updateLearnedPhrase(categoryId, phrase, action = 'add') {
   if (!getEditableStatusCategories().some((category) => category.id === categoryId)) {
     throw new Error('Неизвестная категория статуса');
   }
   const normalizedPhrase = String(phrase || '').trim().replace(/\s+/g, ' ');
   if (!normalizedPhrase || normalizedPhrase.length > 120) {
     throw new Error('Вариант статуса должен содержать от 1 до 120 символов');
+  }
+
+  if (isPgConnected() && pool) {
+    const category = getStatusCategory(categoryId);
+    const systemPhrase = category.phrases.find((item) => item.toLowerCase() === normalizedPhrase.toLowerCase());
+    if (action === 'remove' && systemPhrase) {
+      await pool.query(
+        `INSERT INTO learned_phrases (category_id, phrase, is_disabled)
+         VALUES ($1, $2, TRUE)
+         ON CONFLICT (category_id, phrase) DO UPDATE SET is_disabled = TRUE`,
+        [categoryId, systemPhrase]
+      );
+    } else if (action === 'remove') {
+      await pool.query(
+        'DELETE FROM learned_phrases WHERE category_id = $1 AND LOWER(phrase) = LOWER($2)',
+        [categoryId, normalizedPhrase]
+      );
+    } else {
+      await pool.query(
+        `INSERT INTO learned_phrases (category_id, phrase, is_disabled)
+         VALUES ($1, $2, FALSE)
+         ON CONFLICT (category_id, phrase) DO UPDATE SET is_disabled = FALSE`,
+        [categoryId, normalizedPhrase]
+      );
+    }
+    await loadLearnedPhrasesFromDb();
+    return getEditableStatusCategories().find((category) => category.id === categoryId);
   }
 
   const dictionary = readLearnedDictionary();
@@ -97,7 +151,7 @@ function updateLearnedPhrase(categoryId, phrase, action = 'add') {
   return getEditableStatusCategories().find((category) => category.id === categoryId);
 }
 
-function renameLearnedPhrase(categoryId, oldPhrase, newPhrase) {
+async function renameLearnedPhrase(categoryId, oldPhrase, newPhrase) {
   if (!getEditableStatusCategories().some((category) => category.id === categoryId)) {
     throw new Error('Неизвестная категория статуса');
   }
@@ -105,6 +159,35 @@ function renameLearnedPhrase(categoryId, oldPhrase, newPhrase) {
   const newValue = String(newPhrase || '').trim().replace(/\s+/g, ' ');
   if (!oldValue || !newValue || newValue.length > 120) {
     throw new Error('Вариант статуса должен содержать от 1 до 120 символов');
+  }
+
+  if (isPgConnected() && pool) {
+    const category = getStatusCategory(categoryId);
+    const systemPhrase = category.phrases.find((item) => item.toLowerCase() === oldValue.toLowerCase());
+    if (!systemPhrase && !getStatusPhrases(category).some((item) => item.toLowerCase() === oldValue.toLowerCase())) {
+      throw new Error('Фраза не найдена');
+    }
+    if (systemPhrase) {
+      await pool.query(
+        `INSERT INTO learned_phrases (category_id, phrase, is_disabled)
+         VALUES ($1, $2, TRUE)
+         ON CONFLICT (category_id, phrase) DO UPDATE SET is_disabled = TRUE`,
+        [categoryId, systemPhrase]
+      );
+    } else {
+      await pool.query(
+        'DELETE FROM learned_phrases WHERE category_id = $1 AND LOWER(phrase) = LOWER($2)',
+        [categoryId, oldValue]
+      );
+    }
+    await pool.query(
+      `INSERT INTO learned_phrases (category_id, phrase, is_disabled)
+       VALUES ($1, $2, FALSE)
+       ON CONFLICT (category_id, phrase) DO UPDATE SET is_disabled = FALSE`,
+      [categoryId, newValue]
+    );
+    await loadLearnedPhrasesFromDb();
+    return getEditableStatusCategories().find((category) => category.id === categoryId);
   }
 
   const dictionary = readLearnedDictionary();
@@ -381,8 +464,8 @@ function normalizeText(text) {
 
 const SEMANTIC_CATEGORY_ROOTS = {
   declined: [
-    'otkaz', 'foydalan', 'ochir', 'uchir', 'otmen', 'gaplash',
-    'бросил', 'отказ', 'нет времени', 'vaqti', 'internet', 'shubhali',
+    'otkaz', 'foydalanmayman', 'ochirib', 'uchirib', 'otmen qildi', 'gaplashmoqchi emas',
+    'бросил', 'отказ', 'нет времени', "vaqti yo'q", 'vaqti yoq', 'internet', 'shubhali',
     'ishxona', 'kompaniya', 'korxona', 'aptek', 'spam', 'ishlatmaydi'
   ],
   linkSent: [
@@ -502,6 +585,7 @@ module.exports = {
   collapseRepeatedChars,
   levenshteinDistance,
   matchesCategory,
+  loadLearnedPhrasesFromDb,
   getEditableStatusCategories,
   updateLearnedPhrase,
   renameLearnedPhrase,

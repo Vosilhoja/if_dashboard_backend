@@ -14,33 +14,33 @@ router.get('/statuses', authenticateToken, authorizeRoles('super_admin', 'admin'
   return res.json({ categories: getEditableStatusCategories() });
 });
 
-router.post('/statuses/phrases', authenticateToken, authorizeRoles('super_admin', 'admin'), (req, res, next) => {
+router.post('/statuses/phrases', authenticateToken, authorizeRoles('super_admin', 'admin'), async (req, res, next) => {
   try {
     const { categoryId, phrase } = req.body || {};
     return res.status(201).json({
-      category: updateLearnedPhrase(categoryId, phrase, 'add'),
+      category: await updateLearnedPhrase(categoryId, phrase, 'add'),
     });
   } catch (error) {
     next(error);
   }
 });
 
-router.delete('/statuses/phrases', authenticateToken, authorizeRoles('super_admin', 'admin'), (req, res, next) => {
+router.delete('/statuses/phrases', authenticateToken, authorizeRoles('super_admin', 'admin'), async (req, res, next) => {
   try {
     const { categoryId, phrase } = req.body || {};
     return res.json({
-      category: updateLearnedPhrase(categoryId, phrase, 'remove'),
+      category: await updateLearnedPhrase(categoryId, phrase, 'remove'),
     });
   } catch (error) {
     next(error);
   }
 });
 
-router.put('/statuses/phrases', authenticateToken, authorizeRoles('super_admin', 'admin'), (req, res, next) => {
+router.put('/statuses/phrases', authenticateToken, authorizeRoles('super_admin', 'admin'), async (req, res, next) => {
   try {
     const { categoryId, oldPhrase, newPhrase } = req.body || {};
     return res.json({
-      category: renameLearnedPhrase(categoryId, oldPhrase, newPhrase),
+      category: await renameLearnedPhrase(categoryId, oldPhrase, newPhrase),
     });
   } catch (error) {
     next(error);

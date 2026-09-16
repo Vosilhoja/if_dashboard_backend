@@ -4,6 +4,7 @@ const cors = require('cors');
 const pinoHttp = require('pino-http');
 const config = require('./config');
 const { initDatabase } = require('./db');
+const { loadLearnedPhrasesFromDb } = require('./utils/statusMatcher');
 const { seedDefaultUsers } = require('./db/seed');
 const { apiLimiter } = require('./middleware/rateLimiter');
 const { notFoundHandler, errorHandler } = require('./middleware/errorHandler');
@@ -144,6 +145,7 @@ async function startServer() {
     
     // Подключение к БД
     await initDatabase();
+    await loadLearnedPhrasesFromDb();
 
     // Наполнение пользователями по умолчанию
     await seedDefaultUsers();

@@ -18,6 +18,9 @@ yarn-error.log*
 logs/
 *.log
 
+# Local-only fallback for status phrases. Production uses PostgreSQL.
+src/config/learned-phrases.local.json
+
 # OS files
 .DS_Store
 Thumbs.db

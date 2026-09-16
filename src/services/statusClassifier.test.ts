@@ -69,3 +69,19 @@ test('positive wording with kerak is not treated as a declined call', () => {
   assert.equal(matcher.matchesCategory("ha albatta kerak bo'ladi", matcher.STATUS_CONFIG.declined), false);
   assert.equal(matcher.matchesCategory('otkaz qildi', matcher.STATUS_CONFIG.declined), true);
 });
+
+test('generic vaqti wording is not treated as a declined call', () => {
+  const matcher = require('../utils/statusMatcher');
+  assert.equal(
+    matcher.matchesCategory('operator vaqtida javob berdi, hammasi yaxshi', matcher.STATUS_CONFIG.declined),
+    false
+  );
+  assert.equal(
+    matcher.matchesCategory('mijoz vaqtincha band, keyin qayta aloqaga chiqamiz', matcher.STATUS_CONFIG.declined),
+    false
+  );
+  assert.equal(
+    matcher.matchesCategory("vaqti yo'q, band", matcher.STATUS_CONFIG.declined),
+    true
+  );
+});
