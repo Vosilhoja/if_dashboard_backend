@@ -42,6 +42,20 @@ async function enqueueUnmatchedClassification() {
   return { jobId: job.id, uniqueTexts: texts.length };
 }
 
+async function getClassificationJobStatus(jobId) {
+  if (!queue) throw new Error('REDIS_URL не настроен');
+  const job = await queue.getJob(jobId);
+  if (!job) return null;
+  const state = await job.getState();
+  return {
+    jobId: job.id,
+    state,
+    progress: job.progress,
+    result: state === 'completed' ? job.returnvalue : undefined,
+    error: state === 'failed' ? job.failedReason : undefined,
+  };
+}
+
 function startStatusClassifierWorker() {
   if (!queue) {
     console.warn('[StatusClassifier] REDIS_URL не задан, batch worker отключен');
@@ -81,4 +95,9 @@ function startStatusSuggestionScheduler() {
   setInterval(run, dayMs);
 }
 
-module.exports = { enqueueUnmatchedClassification, startStatusClassifierWorker, startStatusSuggestionScheduler };
+module.exports = {
+  enqueueUnmatchedClassification,
+  getClassificationJobStatus,
+  startStatusClassifierWorker,
+  startStatusSuggestionScheduler,
+};

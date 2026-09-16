@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { authenticateToken, authorizeRoles } = require('../middleware/auth');
 const { adminStatusLimiter } = require('../middleware/rateLimiter');
-const { enqueueUnmatchedClassification } = require('../services/statusClassificationQueue');
+const { enqueueUnmatchedClassification, getClassificationJobStatus } = require('../services/statusClassificationQueue');
 const { approveSuggestion, listPendingSuggestions, assignSuggestion } = require('../services/statusSuggestionService');
 const {
   getEditableStatusCategories,
@@ -58,6 +58,16 @@ router.put('/statuses/phrases', authenticateToken, authorizeRoles('super_admin',
 router.post('/classify-unmatched', authenticateToken, authorizeRoles('super_admin', 'admin'), adminStatusLimiter, async (req, res, next) => {
   try {
     return res.status(202).json(await enqueueUnmatchedClassification());
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/classify-unmatched/:jobId', authenticateToken, authorizeRoles('super_admin', 'admin'), async (req, res, next) => {
+  try {
+    const result = await getClassificationJobStatus(req.params.jobId);
+    if (!result) return res.status(404).json({ error: 'Задача синхронизации не найдена' });
+    return res.json(result);
   } catch (error) {
     next(error);
   }
