@@ -310,6 +310,24 @@ async function fetchNewRowsForSheet(type) {
   return { rows, isInitial: false };
 }
 
+function getEffectiveSheetRowCount(rawCount, loadedRowsLength = 0) {
+  const numericRawCount = Number(rawCount);
+  const numericLoadedRowsLength = Number(loadedRowsLength);
+
+  if (!Number.isFinite(numericRawCount) && !Number.isFinite(numericLoadedRowsLength)) {
+    return 0;
+  }
+
+  const rawCountValue = Number.isFinite(numericRawCount) ? numericRawCount : 0;
+  const loadedRowsValue = Number.isFinite(numericLoadedRowsLength) ? numericLoadedRowsLength : 0;
+
+  if (loadedRowsValue > 0) {
+    return Math.max(rawCountValue, loadedRowsValue);
+  }
+
+  return rawCountValue;
+}
+
 async function getSheetSummary(type, refresh = false) {
   const cacheKey = `sheet_${type}`;
   const auth = getJwtClient();
@@ -326,7 +344,7 @@ async function getSheetSummary(type, refresh = false) {
   }
   if (!sheet) throw new Error(`Лист не найден в документе Google Таблицы для "${type}"`);
 
-  const total = Number(sheet.rowCount || cache[cacheKey]?.data?.length || 0);
+  const total = getEffectiveSheetRowCount(sheet.rowCount, cache[cacheKey]?.data?.length || 0);
   return {
     type,
     total,
@@ -362,7 +380,7 @@ async function fetchSheetPage(type, page, pageSize) {
   return {
     headers: sheet.headerValues || [],
     rows,
-    total: Number(sheet.rowCount || rows.length),
+    total: getEffectiveSheetRowCount(sheet.rowCount, rows.length),
   };
 }
 
