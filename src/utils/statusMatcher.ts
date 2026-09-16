@@ -498,6 +498,10 @@ function isWrongPersonStatus(comment, cfg) {
 
 module.exports = {
   STATUS_CONFIG,
+  normalizeText,
+  collapseRepeatedChars,
+  levenshteinDistance,
+  matchesCategory,
   getEditableStatusCategories,
   updateLearnedPhrase,
   renameLearnedPhrase,

@@ -62,3 +62,10 @@ test('generic "уже" wording is not treated as an existing registration', () =
   assert.equal(matcher.isAlreadyRegisteredStatus('не зарегистрировался'), false);
   assert.equal(matcher.isAlreadyRegisteredStatus('botdan ro`yxatdan o`tdi'), true);
 });
+
+test('positive wording with kerak is not treated as a declined call', () => {
+  const matcher = require('../utils/statusMatcher');
+  assert.equal(matcher.matchesCategory('menga kerak, qachon boshlanadi?', matcher.STATUS_CONFIG.declined), false);
+  assert.equal(matcher.matchesCategory("ha albatta kerak bo'ladi", matcher.STATUS_CONFIG.declined), false);
+  assert.equal(matcher.matchesCategory('otkaz qildi', matcher.STATUS_CONFIG.declined), true);
+});
