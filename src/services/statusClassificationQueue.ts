@@ -42,6 +42,9 @@ async function enqueueUnmatchedClassification() {
   enqueueInFlight = (async () => {
     const { rows } = await fetchNewRowsForSheet('numbers');
     const texts = [...new Set(rows.map(statusText).filter(Boolean))];
+    if (texts.length === 0) {
+      return { jobId: null, uniqueTexts: 0, completed: true };
+    }
     const job = await queue.add('classify-unmatched', { texts }, { jobId: `status-${Date.now()}` });
     return { jobId: job.id, uniqueTexts: texts.length };
   })();

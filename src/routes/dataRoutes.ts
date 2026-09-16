@@ -141,6 +141,13 @@ router.get('/settings-info', authenticateToken, (req, res) => {
 router.get('/sheets/:type', authenticateToken, dashboardLimiter, dashboardRefreshLimiter, async (req, res, next) => {
   try {
     const { type } = req.params;
+    if (req.query.summary === 'true') {
+      const summary = await require('../services/googleSheets').getSheetSummary(
+        type,
+        req.query.fresh === 'true' || req.query.refresh === 'true'
+      );
+      return res.status(200).json(summary);
+    }
     const page = Math.max(1, parseInt(req.query.page || '1', 10));
     const pageSize = Math.min(500, Math.max(10, parseInt(req.query.pageSize || '25', 10)));
     const search = (req.query.search || '').trim();

@@ -278,8 +278,9 @@ async function fetchNewRowsForSheet(type) {
   const cacheKey = `sheet_${type}`;
   const existing = cache[cacheKey]?.data || [];
   if (!existing.length) {
-    const rows = await fetchAllRowsForSheet(type, true);
-    return { rows, isInitial: true };
+    // Do not turn a manual status check into a full 64k+ row download after
+    // a process restart. A complete refresh is an explicit table action.
+    return { rows: [], isInitial: true };
   }
 
   const auth = getJwtClient();
@@ -305,6 +306,62 @@ async function fetchNewRowsForSheet(type) {
   }
   console.log(`[GoogleSheets API] Загружено новых строк для "${type}": ${rows.length}`);
   return { rows, isInitial: false };
+}
+
+async function getSheetSummary(type, refresh = false) {
+  const cacheKey = `sheet_${type}`;
+  const auth = getJwtClient();
+  const sheetId = getSheetId(type);
+  const doc = new GoogleSpreadsheet(sheetId, auth);
+
+  await withSheetReadLock(async () => {
+    await doc.loadInfo();
+  });
+
+  let sheet = doc.sheetsByIndex[0];
+  if (type === 'numbers_repeat') {
+    sheet = doc.sheetsByTitle['Повторные'] || doc.sheetsByTitle['повторные'] || doc.sheetsByIndex[1] || sheet;
+  }
+  if (!sheet) throw new Error(`Лист не найден в документе Google Таблицы для "${type}"`);
+
+  const total = Number(sheet.rowCount || cache[cacheKey]?.data?.length || 0);
+  return {
+    type,
+    total,
+    cachedAt: cache[cacheKey]?.timestamp
+      ? new Date(cache[cacheKey].timestamp).toISOString()
+      : null,
+    refreshing: false,
+  };
+}
+
+async function fetchSheetPage(type, page, pageSize) {
+  const auth = getJwtClient();
+  const sheetId = getSheetId(type);
+  const doc = new GoogleSpreadsheet(sheetId, auth);
+  await doc.loadInfo();
+  let sheet = doc.sheetsByIndex[0];
+  if (type === 'numbers_repeat') {
+    sheet = doc.sheetsByTitle['Повторные'] || doc.sheetsByTitle['повторные'] || doc.sheetsByIndex[1] || sheet;
+  }
+  if (!sheet) throw new Error(`Лист не найден в документе Google Таблицы для "${type}"`);
+
+  await sheet.loadHeaderRow();
+  const rawRows = await sheet.getRows({
+    offset: (page - 1) * pageSize,
+    limit: pageSize,
+  });
+  const rows = rawRows.map((row) => {
+    const item = {};
+    for (const header of sheet.headerValues || []) item[header] = row.get(header) ?? '';
+    return item;
+  });
+
+  return {
+    headers: sheet.headerValues || [],
+    rows,
+    total: Number(sheet.rowCount || rows.length),
+  };
 }
 
 async function refreshSheet(type) {
@@ -1052,6 +1109,22 @@ async function getPeriodDetails(startDate = '', endDate = '') {
  * Пагинация и поиск по сырым таблицам
  */
 async function getSheetPaginated(type, page = 1, pageSize = 25, search = '', forceRefresh = false) {
+  const cacheKey = `sheet_${type}`;
+  if (!forceRefresh && !search && !cache[cacheKey]) {
+    const pageData = await fetchSheetPage(type, page, pageSize);
+    return {
+      type,
+      page,
+      pageSize,
+      total: pageData.total,
+      totalPages: Math.ceil(pageData.total / pageSize),
+      headers: pageData.headers,
+      rows: pageData.rows,
+      cachedAt: null,
+      refreshing: true,
+    };
+  }
+
   const allRows = await fetchAllRowsForSheet(type, forceRefresh);
   let headers = [];
   if (allRows.length > 0) {
@@ -1108,5 +1181,6 @@ module.exports = {
   calculateDashboardMetrics,
   getPeriodDetails,
   getSheetPaginated,
+  getSheetSummary,
   classifyRegistrationSource
 };
