@@ -7,6 +7,7 @@ const { approveSuggestion } = require('../services/statusSuggestionService');
 const {
   getEditableStatusCategories,
   updateLearnedPhrase,
+  renameLearnedPhrase,
 } = require('../utils/statusMatcher');
 
 router.get('/statuses', authenticateToken, authorizeRoles('super_admin', 'admin'), (req, res) => {
@@ -29,6 +30,17 @@ router.delete('/statuses/phrases', authenticateToken, authorizeRoles('super_admi
     const { categoryId, phrase } = req.body || {};
     return res.json({
       category: updateLearnedPhrase(categoryId, phrase, 'remove'),
+    });
+
+    router.put('/statuses/phrases', authenticateToken, authorizeRoles('super_admin', 'admin'), (req, res, next) => {
+      try {
+        const { categoryId, oldPhrase, newPhrase } = req.body || {};
+        return res.json({
+          category: renameLearnedPhrase(categoryId, oldPhrase, newPhrase),
+        });
+      } catch (error) {
+        next(error);
+      }
     });
   } catch (error) {
     next(error);

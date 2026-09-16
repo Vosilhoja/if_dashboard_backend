@@ -58,6 +58,34 @@ function updateLearnedPhrase(categoryId, phrase, action = 'add') {
   return getEditableStatusCategories().find((category) => category.id === categoryId);
 }
 
+function renameLearnedPhrase(categoryId, oldPhrase, newPhrase) {
+  if (!getEditableStatusCategories().some((category) => category.id === categoryId)) {
+    throw new Error('Неизвестная категория статуса');
+  }
+  const oldValue = String(oldPhrase || '').trim();
+  const newValue = String(newPhrase || '').trim().replace(/\s+/g, ' ');
+  if (!oldValue || !newValue || newValue.length > 120) {
+    throw new Error('Вариант статуса должен содержать от 1 до 120 символов');
+  }
+
+  let dictionary = {};
+  try {
+    dictionary = JSON.parse(fs.readFileSync(learnedPhrasesPath, 'utf8'));
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  const phrases = Array.isArray(dictionary[categoryId]) ? dictionary[categoryId] : [];
+  const index = phrases.findIndex((item) => String(item).toLowerCase() === oldValue.toLowerCase());
+  if (index < 0) throw new Error('Изменять можно только пользовательские фразы');
+  if (phrases.some((item, itemIndex) => itemIndex !== index && String(item).toLowerCase() === newValue.toLowerCase())) {
+    throw new Error('Такая фраза уже существует в этой категории');
+  }
+  phrases[index] = newValue;
+  dictionary[categoryId] = phrases;
+  fs.writeFileSync(learnedPhrasesPath, `${JSON.stringify(dictionary, null, 2)}\n`, 'utf8');
+  return getEditableStatusCategories().find((category) => category.id === categoryId);
+}
+
 const STATUS_CONFIG = {
   linkSent: {
     id: 'link_sent',
@@ -429,6 +457,7 @@ module.exports = {
   STATUS_CONFIG,
   getEditableStatusCategories,
   updateLearnedPhrase,
+  renameLearnedPhrase,
   isLinkSentStatus,
   isRepeatSentStatus,
   isDeclinedStatus,
