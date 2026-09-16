@@ -54,3 +54,11 @@ test('approved learned phrase is used by the rule engine', async () => {
     fs.writeFileSync(filePath, original);
   }
 });
+
+test('generic "уже" wording is not treated as an existing registration', () => {
+  const matcher = require('../utils/statusMatcher');
+  assert.equal(matcher.isAlreadyRegisteredStatus('уже отказался'), false);
+  assert.equal(matcher.isAlreadyRegisteredStatus('уже не хочет говорить'), false);
+  assert.equal(matcher.isAlreadyRegisteredStatus('не зарегистрировался'), false);
+  assert.equal(matcher.isAlreadyRegisteredStatus('botdan ro`yxatdan o`tdi'), true);
+});

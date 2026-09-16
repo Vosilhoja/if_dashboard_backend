@@ -3,6 +3,10 @@ const config = require('../config');
 const UserModel = require('../models/User');
 
 class AuthController {
+  // bcrypt still runs when the username does not exist, preventing timing-based
+  // username enumeration.
+  static dummyPasswordHash = '$2b$12$TGvFam2jx3OoapgA6kra6.p9FlQdoLrR0oKzqLXhc/k6ZO4Ak/cla';
+
   /**
    * Вход в систему (Login)
    * Поддерживает как пароль команды HURMO, так и связку логин+пароль оператора/админа
@@ -25,7 +29,12 @@ class AuthController {
 
       const user = await UserModel.findByUsername(targetUsername);
 
-      if (!user) {
+      // Сравнение хеша пароля через bcrypt с защитой от тайминг-атак
+      const isPasswordValid = await UserModel.comparePassword(
+        password,
+        user?.password_hash || AuthController.dummyPasswordHash
+      );
+      if (!user || !isPasswordValid) {
         return res.status(401).json({
           status: 'fail',
           error: 'Неверные учетные данные'
@@ -36,15 +45,6 @@ class AuthController {
         return res.status(403).json({
           status: 'fail',
           error: 'Учетная запись деактивирована'
-        });
-      }
-
-      // Сравнение хеша пароля через bcrypt с защитой от тайминг-атак
-      const isPasswordValid = await UserModel.comparePassword(password, user.password_hash);
-      if (!isPasswordValid) {
-        return res.status(401).json({
-          status: 'fail',
-          error: 'Неверный пароль доступа'
         });
       }
 

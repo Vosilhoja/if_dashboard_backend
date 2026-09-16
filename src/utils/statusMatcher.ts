@@ -280,7 +280,7 @@ const SEMANTIC_CATEGORY_ROOTS = {
     'повтор', 'повторн', 'перезвон', 'снов', 'кайта', 'такрор'
   ],
   alreadyRegistered: [
-    'botdan', 'зарегистр', 'уже'
+    'botdan'
   ],
   wrongPerson: [
     'notogri', 'notugri', 'adashgan', 'не тот', 'неправильн', 'чужой'

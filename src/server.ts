@@ -59,11 +59,6 @@ app.use(cors({
       return callback(null, true);
     }
 
-    // Check dynamic Vercel preview deployments (*.vercel.app)
-    if (/^https:\/\/if-dashboard.*\.vercel\.app$/.test(origin)) {
-      return callback(null, true);
-    }
-
     if (config.nodeEnv === 'development') {
       return callback(null, true);
     }
