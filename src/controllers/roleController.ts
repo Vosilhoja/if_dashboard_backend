@@ -2,6 +2,13 @@ const UserModel = require('../models/User');
 const { inMemoryStore, isPgConnected, pool } = require('../db');
 const config = require('../config');
 
+function handleControllerError(res, error) {
+  if (error instanceof UserModel.DbOperationError) {
+    return res.status(503).json({ status: 'error', error: 'Сбой базы данных, повторите позже' });
+  }
+  return res.status(500).json({ status: 'error', error: error.message });
+}
+
 class RoleController {
   // Получить список всех доступных ролей
   static async getRoles(req, res) {
@@ -12,7 +19,7 @@ class RoleController {
       }
       return res.status(200).json({ status: 'success', roles: inMemoryStore.roles });
     } catch (error) {
-      return res.status(500).json({ status: 'error', error: error.message });
+      return handleControllerError(res, error);
     }
   }
 
@@ -22,7 +29,7 @@ class RoleController {
       const users = await UserModel.getAllUsers();
       return res.status(200).json({ status: 'success', users });
     } catch (error) {
-      return res.status(500).json({ status: 'error', error: error.message });
+      return handleControllerError(res, error);
     }
   }
 
@@ -65,7 +72,7 @@ class RoleController {
         user: newUser
       });
     } catch (error) {
-      return res.status(500).json({ status: 'error', error: error.message });
+      return handleControllerError(res, error);
     }
   }
 
@@ -95,7 +102,7 @@ class RoleController {
         user: updated
       });
     } catch (error) {
-      return res.status(500).json({ status: 'error', error: error.message });
+      return handleControllerError(res, error);
     }
   }
 
@@ -126,7 +133,7 @@ class RoleController {
         message: `Пользователь ${targetUser.username} успешно удален`
       });
     } catch (error) {
-      return res.status(500).json({ status: 'error', error: error.message });
+      return handleControllerError(res, error);
     }
   }
 
@@ -165,7 +172,7 @@ class RoleController {
         user: updated
       });
     } catch (error) {
-      return res.status(500).json({ status: 'error', error: error.message });
+      return handleControllerError(res, error);
     }
   }
   // Деактивировать / активировать пользователя (только для super_admin и admin)
@@ -200,7 +207,7 @@ class RoleController {
         user: updated
       });
     } catch (error) {
-      return res.status(500).json({ status: 'error', error: error.message });
+      return handleControllerError(res, error);
     }
   }
 }

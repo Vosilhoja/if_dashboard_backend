@@ -1,6 +1,14 @@
 const bcrypt = require('bcryptjs');
 const { pool, isPgConnected, inMemoryStore } = require('../db');
 
+class DbOperationError extends Error {
+  constructor(message, cause) {
+    super(message);
+    this.name = 'DbOperationError';
+    this.cause = cause;
+  }
+}
+
 class UserModel {
   // Поиск пользователя по логину
   static async findByUsername(username) {
@@ -20,6 +28,7 @@ class UserModel {
         return res.rows[0] || null;
       } catch (e) {
         console.error('Ошибка findByUsername в PG:', e.message);
+        throw new DbOperationError('Не удалось получить пользователя из БД', e);
       }
     }
     
@@ -51,6 +60,7 @@ class UserModel {
         return res.rows[0] || null;
       } catch (e) {
         console.error('Ошибка findById в PG:', e.message);
+        throw new DbOperationError('Не удалось получить пользователя из БД', e);
       }
     }
 
@@ -82,6 +92,7 @@ class UserModel {
         return res.rows[0] || null;
       } catch (e) {
         console.error('Ошибка findByTelegramId в PG:', e.message);
+        throw new DbOperationError('Не удалось получить пользователя из БД', e);
       }
     }
 
@@ -107,6 +118,7 @@ class UserModel {
         return res.rows[0];
       } catch (e) {
         console.error('Ошибка создания пользователя в PG:', e.message);
+        throw new DbOperationError('Не удалось создать пользователя в БД', e);
       }
     }
 
@@ -144,6 +156,7 @@ class UserModel {
         return;
       } catch (e) {
         console.error('Ошибка updateLastLogin в PG:', e.message);
+        throw new DbOperationError('Не удалось обновить время входа в БД', e);
       }
     }
 
@@ -167,6 +180,7 @@ class UserModel {
         return res.rows[0] || null;
       } catch (e) {
         console.error('Ошибка linkTelegramId в PG:', e.message);
+        throw new DbOperationError('Не удалось привязать Telegram в БД', e);
       }
     }
 
@@ -195,6 +209,7 @@ class UserModel {
         return res.rows;
       } catch (e) {
         console.error('Ошибка getAllUsers в PG:', e.message);
+        throw new DbOperationError('Не удалось получить пользователей из БД', e);
       }
     }
 
@@ -231,6 +246,7 @@ class UserModel {
         return res.rows[0] || null;
       } catch (e) {
         console.error('Ошибка updateUserRole в PG:', e.message);
+        throw new DbOperationError('Не удалось изменить роль в БД', e);
       }
     }
 
@@ -254,6 +270,7 @@ class UserModel {
         return res.rows[0] || null;
       } catch (e) {
         console.error('Ошибка updateUserPermissions в PG:', e.message);
+        throw new DbOperationError('Не удалось изменить права в БД', e);
       }
     }
 
@@ -276,6 +293,7 @@ class UserModel {
         return res.rows[0] || null;
       } catch (e) {
         console.error('Ошибка setUserActive в PG:', e.message);
+        throw new DbOperationError('Не удалось изменить статус пользователя в БД', e);
       }
     }
 
@@ -292,10 +310,11 @@ class UserModel {
     const numId = Number(userId);
     if (isPgConnected() && pool) {
       try {
-        await pool.query('DELETE FROM users WHERE id = $1', [numId]);
-        return true;
+        const result = await pool.query('DELETE FROM users WHERE id = $1', [numId]);
+        return result.rowCount > 0;
       } catch (e) {
         console.error('Ошибка deleteUser в PG:', e.message);
+        throw new DbOperationError('Не удалось удалить пользователя из БД', e);
       }
     }
 
@@ -331,3 +350,4 @@ class UserModel {
 }
 
 module.exports = UserModel;
+module.exports.DbOperationError = DbOperationError;
