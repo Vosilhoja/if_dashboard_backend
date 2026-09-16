@@ -1,8 +1,9 @@
 const { Queue, Worker } = require('bullmq');
 const config = require('../config');
-const { fetchNewRowsForSheet } = require('./googleSheets');
+const { fetchAllRowsForSheet } = require('./googleSheets');
 const { classifyBatch } = require('./statusClassifier');
 const { createSuggestions } = require('./statusSuggestionService');
+const { STATUS_CONFIG, matchesCategory } = require('../utils/statusMatcher');
 
 const queueName = process.env.STATUS_CLASSIFICATION_QUEUE_NAME || 'status-classifications';
 const enabled = Boolean(process.env.REDIS_URL);
@@ -40,13 +41,27 @@ async function enqueueUnmatchedClassification() {
   if (enqueueInFlight) return enqueueInFlight;
 
   enqueueInFlight = (async () => {
-    const { rows } = await fetchNewRowsForSheet('numbers');
-    const texts = [...new Set(rows.map(statusText).filter(Boolean))];
-    if (texts.length === 0) {
+    const rows = await fetchAllRowsForSheet('numbers', false);
+    const categories = Object.values(STATUS_CONFIG).filter(
+      (category): category is { id: string; phrases: string[] } =>
+        Boolean(category && typeof category === 'object' && 'id' in category && 'phrases' in category)
+    );
+    const unmatchedTexts = [...new Set(
+      rows
+        .map(statusText)
+        .filter(Boolean)
+        .filter((text) => !categories.some((category) => matchesCategory(text, category)))
+    )];
+
+    if (unmatchedTexts.length === 0) {
       return { jobId: null, uniqueTexts: 0, completed: true };
     }
-    const job = await queue.add('classify-unmatched', { texts }, { jobId: `status-${Date.now()}` });
-    return { jobId: job.id, uniqueTexts: texts.length };
+    const job = await queue.add(
+      'classify-unmatched',
+      { texts: unmatchedTexts },
+      { jobId: `status-${Date.now()}` }
+    );
+    return { jobId: job.id, uniqueTexts: unmatchedTexts.length };
   })();
 
   try {
