@@ -112,6 +112,19 @@ function getMainRegistrationDate(row) {
   );
 }
 
+function getMainRegistrationSource(row) {
+  return getRowValue(
+    row,
+    ['Откуда пришёл пользователь', 'Источник', 'Source'],
+    (key) => /(откуда.*приш|источник|source)/.test(key)
+  );
+}
+
+function isBotRegistrationSource(source) {
+  const value = String(source || '').toLowerCase();
+  return /(bot|бот|telegram|телеграм|o'?zi|o`zi|сам(остоятельно)?|сайт(а|ом)?)/i.test(value);
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -556,7 +569,7 @@ async function calculateDashboardMetrics(query: any = {}) {
   // Атрибуция «пришёл через поддержку»: регистрация должна произойти
   // в день звонка или позже. Регистрация до звонка считается отдельным
   // случаем «уже был зарегистрирован», а не результатом поддержки.
-  const mainRegistrationDateByPhone = new Map();
+  const mainRegistrationsByPhone = new Map();
   if (!mainError) {
     for (const row of mainRows) {
       const dateStr = getMainRegistrationDate(row);
@@ -566,10 +579,12 @@ async function calculateDashboardMetrics(query: any = {}) {
       ).normalized;
       if (!phone || !registrationDate) continue;
 
-      const previousDate = mainRegistrationDateByPhone.get(phone);
-      if (!previousDate || registrationDate < previousDate) {
-        mainRegistrationDateByPhone.set(phone, registrationDate);
-      }
+      const registrations = mainRegistrationsByPhone.get(phone) || [];
+      registrations.push({
+        date: registrationDate,
+        fromBot: isBotRegistrationSource(getMainRegistrationSource(row)),
+      });
+      mainRegistrationsByPhone.set(phone, registrations);
     }
   }
 
@@ -657,6 +672,7 @@ async function calculateDashboardMetrics(query: any = {}) {
 
   // Метрика 4: Зарегистрировано после контакта с поддержкой
   const matchedPhonesSupport = new Set();
+  const periodEnd = parseSheetDate(endDate);
   if (!numbersError && !mainError) {
     for (const row of numbersInPeriod) {
       const pDiag = normalizePhoneWithDiagnostics(getPhone(row));
@@ -665,14 +681,20 @@ async function calculateDashboardMetrics(query: any = {}) {
       const callDate = parseSheetDate(
         getCallDate(row)
       );
-      const registrationDate = p ? mainRegistrationDateByPhone.get(p) : undefined;
+      const registrations = p ? mainRegistrationsByPhone.get(p) || [] : [];
+      const registration = registrations
+        .filter((item) =>
+          item.date >= callDate &&
+          (!periodEnd || item.date <= periodEnd) &&
+          !item.fromBot
+        )
+        .sort((a, b) => a.date - b.date)[0];
       if (
         p &&
         !isAlreadyRegisteredStatus(comment, STATUS_CONFIG.alreadyRegistered) &&
         callDate &&
-        registrationDate &&
-        isDateInRange(callDate, startDate, endDate) &&
-        registrationDate >= callDate
+        registration &&
+        isDateInRange(callDate, startDate, endDate)
       ) {
         matchedPhonesSupport.add(p);
       }
@@ -693,8 +715,15 @@ async function calculateDashboardMetrics(query: any = {}) {
       const callDate = parseSheetDate(
         getCallDate(row)
       );
-      const registrationDate = p ? mainRegistrationDateByPhone.get(p) : undefined;
-      if (p && callDate && registrationDate && registrationDate >= callDate) {
+      const registrations = p ? mainRegistrationsByPhone.get(p) || [] : [];
+      const registration = registrations
+        .filter((item) =>
+          item.date >= callDate &&
+          (!periodEnd || item.date <= periodEnd) &&
+          !item.fromBot
+        )
+        .sort((a, b) => a.date - b.date)[0];
+      if (p && callDate && registration) {
         matchedRepeatPhones.add(p);
       }
     }
