@@ -2,6 +2,10 @@ const { Telegraf, Markup } = require('telegraf');
 const config = require('../config');
 const UserModel = require('../models/User');
 const { calculateDashboardMetrics } = require('../services/googleSheets');
+const {
+  consumeTelegramLinkCode,
+  isTelegramLinkRateLimited,
+} = require('../services/telegramLink.service');
 
 /**
  * Форматирует число: 0 → '—'
@@ -81,38 +85,38 @@ function initTelegramBot() {
       `👋 Здравствуйте, *${tgUser.first_name}*!\n\n` +
       `Это официальный бот аналитического центра *HURMO UZ*.\n` +
       `Ваш Telegram ID: \`${tgId}\`\n\n` +
-      `🔐 Для связывания с вашим аккаунтом дашборда отправьте команду:\n` +
-      `\`/link <ваш_логин> <пароль>\`\n\n` +
-      `Например:\n\`/link admin hurmo_secure_pass_2026\``,
+      `🔐 Для связывания откройте дашборд, войдите в аккаунт и запросите одноразовый код Telegram.\n` +
+      `Затем отправьте команду:\n\`/link <код из дашборда>\``,
       { parse_mode: 'Markdown' }
     );
   });
 
   // =========================================
-  // /link <username> <password> — Привязка аккаунта
+  // /link <one-time-code> — Привязка аккаунта без передачи пароля в Telegram
   // =========================================
   bot.command('link', async (ctx) => {
     try {
-      const parts = ctx.message.text.split(' ');
-      if (parts.length < 3) {
-        return ctx.reply('⚠️ Формат команды: `/link <логин> <пароль>`', { parse_mode: 'Markdown' });
-      }
-
-      const inputUsername = parts[1].trim();
-      const inputPassword = parts[2].trim();
+      const parts = ctx.message.text.trim().split(/\s+/);
       const tgId = String(ctx.from.id);
 
-      const user = await UserModel.findByUsername(inputUsername);
-      if (!user) {
-        return ctx.reply('❌ Пользователь с таким логином не найден.');
+      if (await isTelegramLinkRateLimited(tgId)) {
+        return ctx.reply('🔒 Слишком много попыток. Попробуйте через 15 минут.');
       }
 
-      const validPass = await UserModel.comparePassword(inputPassword, user.password_hash);
-      if (!validPass) {
-        return ctx.reply('❌ Неверный пароль доступа.');
+      if (parts.length !== 2 || !/^[A-F0-9]{16}$/i.test(parts[1])) {
+        return ctx.reply('⚠️ Формат команды: `/link <одноразовый код из дашборда>`', { parse_mode: 'Markdown' });
       }
+
+      const userId = await consumeTelegramLinkCode(parts[1]);
+      const user = userId ? await UserModel.findById(userId) : null;
+      if (!user) return ctx.reply('❌ Код недействителен или истёк.');
 
       await UserModel.linkTelegramId(user.username, tgId);
+      try {
+        await ctx.deleteMessage(ctx.message.message_id);
+      } catch (deleteError) {
+        console.warn('[Bot /link] Не удалось удалить сообщение с кодом:', deleteError.message);
+      }
 
       return ctx.reply(
         `🎉 Успешно! Аккаунт *${user.username}* привязан к вашему Telegram!\n` +

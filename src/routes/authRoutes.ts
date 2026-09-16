@@ -13,4 +13,7 @@ router.get('/me', authenticateToken, AuthController.getMe);
 // POST /api/auth/logout
 router.post('/logout', authenticateToken, AuthController.logout);
 
+// POST /api/auth/telegram-link-code — одноразовый код без передачи пароля в Telegram
+router.post('/telegram-link-code', authenticateToken, AuthController.createTelegramLinkCode);
+
 module.exports = router;

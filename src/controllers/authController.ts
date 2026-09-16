@@ -1,6 +1,10 @@
 const jwt = require('jsonwebtoken');
 const config = require('../config');
 const UserModel = require('../models/User');
+const {
+  createTelegramLinkCode,
+  LINK_TTL_SECONDS,
+} = require('../services/telegramLink.service');
 
 class AuthController {
   // bcrypt still runs when the username does not exist, preventing timing-based
@@ -112,6 +116,23 @@ class AuthController {
       status: 'success',
       message: 'Сессия успешно завершена'
     });
+  }
+
+  static async createTelegramLinkCode(req, res) {
+    try {
+      const result = await createTelegramLinkCode(req.user.id);
+      return res.status(201).json({
+        status: 'success',
+        code: result.code,
+        expiresInSeconds: LINK_TTL_SECONDS,
+      });
+    } catch (error) {
+      console.error('[Auth Controller Telegram Link Error]:', error);
+      return res.status(503).json({
+        status: 'fail',
+        error: 'Привязка Telegram временно недоступна. Попробуйте позже.',
+      });
+    }
   }
 }
 
