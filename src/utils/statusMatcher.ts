@@ -6,6 +6,7 @@ const path = require('path');
 const { pool, isPgConnected } = require('../db');
 
 const learnedPhrasesPath = path.join(process.cwd(), 'src', 'config', 'learned-phrases.json');
+const CACHE_TTL_MS = 30_000;
 let learnedCache = { byCategory: new Map(), disabled: new Map(), loadedAt: 0 };
 
 function getLearnedPhrases(categoryId) {
@@ -50,6 +51,11 @@ async function loadLearnedPhrasesFromDb() {
  */
 function getStatusPhrases(category) {
   if (isPgConnected()) {
+    if (Date.now() - learnedCache.loadedAt >= CACHE_TTL_MS) {
+      loadLearnedPhrasesFromDb().catch((error) => {
+        console.error('[StatusMatcher] Не удалось обновить кэш learned-фраз:', error.message || error);
+      });
+    }
     const disabled = learnedCache.disabled.get(category.id) || new Set();
     return [
       ...category.phrases.filter((phrase) => !disabled.has(String(phrase).toLowerCase())),

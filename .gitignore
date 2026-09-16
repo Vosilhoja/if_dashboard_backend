@@ -20,6 +20,7 @@ logs/
 
 # Local-only fallback for status phrases. Production uses PostgreSQL.
 src/config/learned-phrases.local.json
+src/config/learned-phrases.json
 
 # OS files
 .DS_Store
