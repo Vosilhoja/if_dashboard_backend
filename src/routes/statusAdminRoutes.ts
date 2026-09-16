@@ -89,7 +89,7 @@ router.post('/suggested-phrases/:id/approve', authenticateToken, authorizeRoles(
   }
 });
 
-router.post('/suggested-phrases/:id/assign', authenticateToken, authorizeRoles('super_admin', 'admin'), async (req, res, next) => {
+const handleAssignSuggestion = async (req, res, next) => {
   try {
     const result = await assignSuggestion(req.params.id, req.body?.category);
     if (!result) return res.status(404).json({ error: 'Предложение не найдено или уже обработано' });
@@ -97,6 +97,9 @@ router.post('/suggested-phrases/:id/assign', authenticateToken, authorizeRoles('
   } catch (error) {
     next(error);
   }
-});
+};
+
+router.post('/suggested-phrases/:id/assign', authenticateToken, authorizeRoles('super_admin', 'admin'), handleAssignSuggestion);
+router.post('/statuses/suggestions/:id/assign', authenticateToken, authorizeRoles('super_admin', 'admin'), handleAssignSuggestion);
 
 module.exports = router;
