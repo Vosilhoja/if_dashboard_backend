@@ -1,32 +1,10 @@
 /**
  * Status matcher and config for call-center outcomes
  */
-const fs = require('fs');
-const path = require('path');
 const { pool, isPgConnected } = require('../db');
 
-const learnedPhrasesPath = path.join(process.cwd(), 'src', 'config', 'learned-phrases.json');
 const CACHE_TTL_MS = 30_000;
 let learnedCache = { byCategory: new Map(), disabled: new Map(), loadedAt: 0 };
-
-function getLearnedPhrases(categoryId) {
-  try {
-    const dictionary = JSON.parse(fs.readFileSync(learnedPhrasesPath, 'utf8'));
-    return Array.isArray(dictionary[categoryId]) ? dictionary[categoryId] : [];
-  } catch (error) {
-    console.warn('[StatusMatcher] Не удалось загрузить learned-phrases.json:', error.message || error);
-    return [];
-  }
-}
-
-function readLearnedDictionary() {
-  try {
-    return JSON.parse(fs.readFileSync(learnedPhrasesPath, 'utf8'));
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-    return {};
-  }
-}
 
 async function loadLearnedPhrasesFromDb() {
   if (!isPgConnected() || !pool) return false;
@@ -62,15 +40,7 @@ function getStatusPhrases(category) {
       ...(learnedCache.byCategory.get(category.id) || []),
     ];
   }
-  const dictionary = readLearnedDictionary();
-  const disabled = Array.isArray(dictionary._disabled?.[category.id])
-    ? dictionary._disabled[category.id]
-    : [];
-  const disabledSet = new Set(disabled.map((phrase) => String(phrase).toLowerCase()));
-  return [
-    ...category.phrases.filter((phrase) => !disabledSet.has(String(phrase).toLowerCase())),
-    ...getLearnedPhrases(category.id),
-  ];
+  return category.phrases;
 }
 
 function getStatusCategory(categoryId) {
@@ -96,6 +66,7 @@ function getEditableStatusCategories() {
 }
 
 async function updateLearnedPhrase(categoryId, phrase, action = 'add') {
+  if (!isPgConnected() || !pool) throw new Error('PostgreSQL не подключен');
   if (!getEditableStatusCategories().some((category) => category.id === categoryId)) {
     throw new Error('Неизвестная категория статуса');
   }
@@ -104,7 +75,7 @@ async function updateLearnedPhrase(categoryId, phrase, action = 'add') {
     throw new Error('Вариант статуса должен содержать от 1 до 120 символов');
   }
 
-  if (isPgConnected() && pool) {
+  {
     const category = getStatusCategory(categoryId);
     const systemPhrase = category.phrases.find((item) => item.toLowerCase() === normalizedPhrase.toLowerCase());
     if (action === 'remove' && systemPhrase) {
@@ -131,33 +102,10 @@ async function updateLearnedPhrase(categoryId, phrase, action = 'add') {
     return getEditableStatusCategories().find((category) => category.id === categoryId);
   }
 
-  const dictionary = readLearnedDictionary();
-  dictionary[categoryId] = Array.isArray(dictionary[categoryId]) ? dictionary[categoryId] : [];
-  const customIndex = dictionary[categoryId].findIndex(
-    (item) => String(item).toLowerCase() === normalizedPhrase.toLowerCase()
-  );
-  if (action === 'remove') {
-    if (customIndex >= 0) {
-      dictionary[categoryId].splice(customIndex, 1);
-    } else {
-      const category = getStatusCategory(categoryId);
-      const systemPhrase = category.phrases.find((item) => String(item).toLowerCase() === normalizedPhrase.toLowerCase());
-      if (systemPhrase) {
-        dictionary._disabled = dictionary._disabled || {};
-        dictionary._disabled[categoryId] = Array.isArray(dictionary._disabled[categoryId]) ? dictionary._disabled[categoryId] : [];
-        if (!dictionary._disabled[categoryId].some((item) => String(item).toLowerCase() === normalizedPhrase.toLowerCase())) {
-          dictionary._disabled[categoryId].push(systemPhrase);
-        }
-      }
-    }
-  } else if (customIndex < 0 && !getStatusPhrases(getStatusCategory(categoryId)).some((item) => item.toLowerCase() === normalizedPhrase.toLowerCase())) {
-    dictionary[categoryId].push(normalizedPhrase);
-  }
-  fs.writeFileSync(learnedPhrasesPath, `${JSON.stringify(dictionary, null, 2)}\n`, 'utf8');
-  return getEditableStatusCategories().find((category) => category.id === categoryId);
 }
 
 async function renameLearnedPhrase(categoryId, oldPhrase, newPhrase) {
+  if (!isPgConnected() || !pool) throw new Error('PostgreSQL не подключен');
   if (!getEditableStatusCategories().some((category) => category.id === categoryId)) {
     throw new Error('Неизвестная категория статуса');
   }
@@ -167,7 +115,7 @@ async function renameLearnedPhrase(categoryId, oldPhrase, newPhrase) {
     throw new Error('Вариант статуса должен содержать от 1 до 120 символов');
   }
 
-  if (isPgConnected() && pool) {
+  {
     const category = getStatusCategory(categoryId);
     const systemPhrase = category.phrases.find((item) => item.toLowerCase() === oldValue.toLowerCase());
     if (!systemPhrase && !getStatusPhrases(category).some((item) => item.toLowerCase() === oldValue.toLowerCase())) {
@@ -196,26 +144,6 @@ async function renameLearnedPhrase(categoryId, oldPhrase, newPhrase) {
     return getEditableStatusCategories().find((category) => category.id === categoryId);
   }
 
-  const dictionary = readLearnedDictionary();
-  const phrases = Array.isArray(dictionary[categoryId]) ? dictionary[categoryId] : [];
-  const index = phrases.findIndex((item) => String(item).toLowerCase() === oldValue.toLowerCase());
-  const category = getStatusCategory(categoryId);
-  const systemIndex = category.phrases.findIndex((item) => String(item).toLowerCase() === oldValue.toLowerCase());
-  if (index < 0 && systemIndex < 0) throw new Error('Фраза не найдена');
-  if (getStatusPhrases(category).some((item) => item.toLowerCase() === newValue.toLowerCase() && item.toLowerCase() !== oldValue.toLowerCase())) {
-    throw new Error('Такая фраза уже существует в этой категории');
-  }
-  if (index >= 0) {
-    phrases[index] = newValue;
-  } else {
-    dictionary._disabled = dictionary._disabled || {};
-    dictionary._disabled[categoryId] = Array.isArray(dictionary._disabled[categoryId]) ? dictionary._disabled[categoryId] : [];
-    dictionary._disabled[categoryId].push(oldValue);
-    phrases.push(newValue);
-  }
-  dictionary[categoryId] = phrases;
-  fs.writeFileSync(learnedPhrasesPath, `${JSON.stringify(dictionary, null, 2)}\n`, 'utf8');
-  return getEditableStatusCategories().find((category) => category.id === categoryId);
 }
 
 const STATUS_CONFIG = {
