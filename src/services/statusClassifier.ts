@@ -1,7 +1,6 @@
-const fs = require('fs');
-const path = require('path');
 const {
   STATUS_CONFIG,
+  getEditableStatusCategories,
   isLinkSentStatus,
   isRepeatSentStatus,
   isDeclinedStatus,
@@ -13,9 +12,7 @@ const { generateGeminiContent } = require('../ai/gemini');
 
 const CONFIDENCE_THRESHOLD = 0.6;
 const CATEGORIES = ['link_sent', 'repeat_sent', 'declined', 'already_registered', 'wrong_person', 'unknown'];
-const learnedPath = path.join(process.cwd(), 'src', 'config', 'learned-phrases.json');
 const memoryCache = new Map();
-let learnedCache = null;
 let aiCalls = 0;
 let cacheHits = 0;
 let aiClassifierOverride = null;
@@ -48,18 +45,9 @@ function normalizedText(text) {
   return collapseRepeatedChars(normalizeText(text));
 }
 
-function readLearnedPhrases() {
-  if (learnedCache) return learnedCache;
-  try {
-    learnedCache = JSON.parse(fs.readFileSync(learnedPath, 'utf8'));
-  } catch {
-    learnedCache = {};
-  }
-  return learnedCache;
-}
-
 function matchesLearned(text, category) {
-  const phrases = readLearnedPhrases()[category] || [];
+  const phrases = getEditableStatusCategories()
+    .find((item) => item.id === category)?.phrases || [];
   return phrases.some((phrase) => text.includes(normalizedText(phrase)));
 }
 

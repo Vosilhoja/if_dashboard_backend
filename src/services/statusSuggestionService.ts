@@ -1,10 +1,6 @@
-const fs = require('fs');
-const path = require('path');
 const { query, isPgConnected } = require('../db');
-const { normalizedText } = require('./statusClassifier');
+const { updateLearnedPhrase } = require('../utils/statusMatcher');
 const config = require('../config');
-
-const learnedPath = path.join(process.cwd(), 'src', 'config', 'learned-phrases.json');
 
 async function createSuggestions() {
   if (!isPgConnected()) return [];
@@ -44,27 +40,19 @@ async function createSuggestions() {
 async function approveSuggestion(id) {
   if (!isPgConnected()) throw new Error('PostgreSQL не подключен');
   const result = await query(
-    `UPDATE suggested_phrases SET status = 'approved', updated_at = CURRENT_TIMESTAMP
-     WHERE id = $1 AND status = 'pending' RETURNING id, category, phrase`,
+    `SELECT id, category, phrase FROM suggested_phrases
+     WHERE id = $1 AND status = 'pending'`,
     [id]
   );
   const suggestion = result.rows[0];
   if (!suggestion) return null;
 
-  let dictionary = {};
-  try {
-    dictionary = JSON.parse(fs.readFileSync(learnedPath, 'utf8'));
-  } catch {
-    dictionary = {};
-  }
-  dictionary[suggestion.category] = Array.isArray(dictionary[suggestion.category])
-    ? dictionary[suggestion.category]
-    : [];
-  const phrase = normalizedText(suggestion.phrase);
-  if (phrase && !dictionary[suggestion.category].includes(phrase)) {
-    dictionary[suggestion.category].push(phrase);
-    fs.writeFileSync(learnedPath, `${JSON.stringify(dictionary, null, 2)}\n`, 'utf8');
-  }
+  await updateLearnedPhrase(suggestion.category, suggestion.phrase, 'add');
+  await query(
+    `UPDATE suggested_phrases SET status = 'approved', updated_at = CURRENT_TIMESTAMP
+     WHERE id = $1 AND status = 'pending'`,
+    [id]
+  );
   return suggestion;
 }
 

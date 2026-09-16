@@ -501,18 +501,6 @@ function matchesCategory(rawText, category) {
   const collapsedNorm = collapseRepeatedChars(norm);
   const collapsedLatin = collapseRepeatedChars(latinNorm);
 
-  const learnedPhrases = getLearnedPhrases(category.id);
-  if (learnedPhrases.some((phrase) => {
-    const normalizedPhrase = normalizeText(phrase);
-    return normalizedPhrase && (
-      norm.includes(normalizedPhrase) ||
-      collapsedNorm.includes(collapseRepeatedChars(normalizedPhrase)) ||
-      latinNorm.includes(transliterateCyrillicToLatin(normalizedPhrase))
-    );
-  })) {
-    return true;
-  }
-
   const semanticRoots = SEMANTIC_CATEGORY_ROOTS[category.id];
   if (semanticRoots) {
     for (const root of semanticRoots) {
