@@ -47,6 +47,18 @@ const dashboardLimiter = rateLimit({
   })
 });
 
+// Refresh requests force a Google Sheets sync and are much more expensive
+// than cached dashboard reads, so limit them separately.
+const dashboardRefreshLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 3,
+  skip: (req) => req.query.refresh !== 'true',
+  ...limiterOptions('dashboard-refresh', {
+    status: 'fail',
+    error: 'Слишком много обновлений данных. Подождите минуту и повторите попытку.'
+  })
+});
+
 // Строгий лимитер для эндпоинта авторизации (защита от Brute Force / перебора паролей)
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 минут
@@ -80,6 +92,7 @@ const adminStatusLimiter = rateLimit({
 module.exports = {
   apiLimiter,
   dashboardLimiter,
+  dashboardRefreshLimiter,
   loginLimiter,
   aiLimiter,
   adminStatusLimiter
