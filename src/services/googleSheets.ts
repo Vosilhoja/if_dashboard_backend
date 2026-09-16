@@ -571,7 +571,6 @@ async function calculateDashboardMetrics(query: any = {}) {
   // телефона: даты нужны для строгой метрики повторных звонков.
   const mainRegistrationsByPhone = new Map();
   const mainPhones = new Set();
-  const mainHasNonBotRegistration = new Set();
   const mainHasUnknownSourceRegistration = new Set();
   if (!mainError) {
     for (const row of mainRows) {
@@ -583,9 +582,7 @@ async function calculateDashboardMetrics(query: any = {}) {
       if (!phone) continue;
       mainPhones.add(phone);
       const sourceClass = classifyRegistrationSource(getMainRegistrationSource(row));
-      if (sourceClass === false) {
-        mainHasNonBotRegistration.add(phone);
-      } else if (sourceClass === null) {
+      if (sourceClass === null) {
         mainHasUnknownSourceRegistration.add(phone);
       }
       if (!registrationDate) continue;
@@ -682,63 +679,24 @@ async function calculateDashboardMetrics(query: any = {}) {
     registeredMainVal = registeredPeopleInPeriod.size;
   }
 
-  // Метрика 4: Зарегистрировано после контакта с поддержкой
-  const SUPPORT_ATTRIBUTION_WINDOW_DAYS = 3;
+  // Метрика 4: все зарегистрированные пользователи, которым звонила поддержка.
+  // Статус оператора не фильтрует эту метрику: `o'tdi`, `bot bor` и похожие
+  // отметки относятся к отдельному показателю alreadyRegisteredCount.
   const supportAttributionDiagnostics = {
     matchedByCleanStatus: 0,
     matchedByDateHeuristic: 0,
     excludedPreExisting: 0,
     excludedAmbiguousNoRegDate: 0,
   };
-  const matchedPhonesSupport = new Set();
   const calledUniquePhones = new Set(
     numbersInPeriod
       .map((row) => normalizePhoneWithDiagnostics(getPhone(row)).normalized)
       .filter(Boolean)
   );
-  if (!numbersError && !mainError) {
-    for (const row of numbersInPeriod) {
-      const pDiag = normalizePhoneWithDiagnostics(getPhone(row));
-      const p = pDiag.normalized;
-      if (!p || !mainPhones.has(p)) continue;
-      const comment = getCallStatus(row);
-      if (isWrongPersonStatus(comment, STATUS_CONFIG.wrongPerson)) continue;
-
-      const isAmbiguousAlreadyReg = isAlreadyRegisteredStatus(
-        comment,
-        STATUS_CONFIG.alreadyRegistered
-      );
-      if (!isAmbiguousAlreadyReg && mainHasNonBotRegistration.has(p)) {
-        matchedPhonesSupport.add(p);
-        supportAttributionDiagnostics.matchedByCleanStatus++;
-        continue;
-      }
-
-      if (!isAmbiguousAlreadyReg) continue;
-
-      const callDate = parseSheetDate(getCallDate(row));
-      const registrations = mainRegistrationsByPhone.get(p) || [];
-      if (!callDate || registrations.length === 0) {
-        supportAttributionDiagnostics.excludedAmbiguousNoRegDate++;
-        continue;
-      }
-
-      const plausibleResultOfThisCall = registrations.some((registration) => {
-        if (registration.fromBot || registration.sourceUnknown) return false;
-        const diffDays = Math.round(
-          (registration.date.getTime() - callDate.getTime()) / (1000 * 60 * 60 * 24)
-        );
-        return diffDays >= 0 && diffDays <= SUPPORT_ATTRIBUTION_WINDOW_DAYS;
-      });
-
-      if (plausibleResultOfThisCall) {
-        matchedPhonesSupport.add(p);
-        supportAttributionDiagnostics.matchedByDateHeuristic++;
-      } else {
-        supportAttributionDiagnostics.excludedPreExisting++;
-      }
-    }
-  }
+  const matchedPhonesSupport = new Set(
+    [...calledUniquePhones].filter((phone) => mainPhones.has(phone))
+  );
+  supportAttributionDiagnostics.matchedByCleanStatus = matchedPhonesSupport.size;
 
   // Метрика 5: Зарегистрировано после повторной ссылки
   let repeatStatusesFoundInPeriod = 0;
@@ -906,9 +864,6 @@ async function calculateDashboardMetrics(query: any = {}) {
       diagnostics: (numbersError || mainError) ? undefined : {
         ...supportAttributionDiagnostics,
         unknownSourceCount: mainHasUnknownSourceRegistration.size,
-        note: supportAttributionDiagnostics.excludedAmbiguousNoRegDate > 0
-          ? `${supportAttributionDiagnostics.excludedAmbiguousNoRegDate} звонков с неоднозначным статусом не удалось однозначно отнести: нет даты регистрации. Метрика может быть занижена.`
-          : undefined,
       },
       error: (numbersError || mainError) || undefined,
     },

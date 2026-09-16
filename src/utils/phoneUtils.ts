@@ -33,6 +33,11 @@ function normalizePhoneWithDiagnostics(rawPhone) {
     return { normalized: '', status: 'invalid', country: 'UNKNOWN', original };
   }
 
+  // International numbers may arrive from spreadsheets with the 00 prefix.
+  if (digits.startsWith('00')) {
+    digits = digits.slice(2);
+  }
+
   // UZBEKISTAN PRIORITY RULES
   if (digits.length === 9) {
     if (digits.startsWith('998')) {
