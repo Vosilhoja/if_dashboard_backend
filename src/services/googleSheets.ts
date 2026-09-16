@@ -120,8 +120,9 @@ function getMainRegistrationSource(row) {
   );
 }
 
-function isBotRegistrationSource(source) {
-  const value = String(source || '').toLowerCase();
+function classifyRegistrationSource(source) {
+  const value = String(source ?? '').trim().toLowerCase();
+  if (!value) return null;
   return /(bot|бот|telegram|телеграм|o'?zi|o`zi|сам(остоятельно)?|сайт(а|ом)?)/i.test(value);
 }
 
@@ -571,6 +572,7 @@ async function calculateDashboardMetrics(query: any = {}) {
   const mainRegistrationsByPhone = new Map();
   const mainPhones = new Set();
   const mainHasNonBotRegistration = new Set();
+  const mainHasUnknownSourceRegistration = new Set();
   if (!mainError) {
     for (const row of mainRows) {
       const dateStr = getMainRegistrationDate(row);
@@ -580,15 +582,19 @@ async function calculateDashboardMetrics(query: any = {}) {
       ).normalized;
       if (!phone) continue;
       mainPhones.add(phone);
-      if (!isBotRegistrationSource(getMainRegistrationSource(row))) {
+      const sourceClass = classifyRegistrationSource(getMainRegistrationSource(row));
+      if (sourceClass === false) {
         mainHasNonBotRegistration.add(phone);
+      } else if (sourceClass === null) {
+        mainHasUnknownSourceRegistration.add(phone);
       }
       if (!registrationDate) continue;
 
       const registrations = mainRegistrationsByPhone.get(phone) || [];
       registrations.push({
         date: registrationDate,
-        fromBot: isBotRegistrationSource(getMainRegistrationSource(row)),
+        fromBot: sourceClass === true,
+        sourceUnknown: sourceClass === null,
       });
       mainRegistrationsByPhone.set(phone, registrations);
     }
@@ -863,6 +869,9 @@ async function calculateDashboardMetrics(query: any = {}) {
       subtext: (numbersError || mainError)
         ? undefined
         : `Уникальные зарегистрированные пользователи из ${calledUniquePhones.size.toLocaleString('ru-RU')} номеров`,
+      diagnostics: {
+        unknownSourceCount: mainHasUnknownSourceRegistration.size,
+      },
       error: (numbersError || mainError) || undefined,
     },
     supportContactsCount: {
@@ -1071,5 +1080,6 @@ module.exports = {
   startBackgroundDataRefresh,
   calculateDashboardMetrics,
   getPeriodDetails,
-  getSheetPaginated
+  getSheetPaginated,
+  classifyRegistrationSource
 };
