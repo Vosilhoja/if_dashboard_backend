@@ -52,7 +52,7 @@ const dashboardLimiter = rateLimit({
 const dashboardRefreshLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 3,
-  skip: (req) => req.query.refresh !== 'true',
+  skip: (req) => req.query.refresh !== 'true' && req.query.fresh !== 'true',
   ...limiterOptions('dashboard-refresh', {
     status: 'fail',
     error: 'Слишком много обновлений данных. Подождите минуту и повторите попытку.'

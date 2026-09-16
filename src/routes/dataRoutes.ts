@@ -13,7 +13,7 @@ const { getAnalyticsData } = require('../services/analyticsService');
 /**
  * GET /api/data
  * Возвращает реальные посчитанные метрики DashboardMetrics из Google Sheets
- * Query params: startDate, endDate, refresh, anomalyThreshold
+ * Query params: startDate, endDate, refresh/fresh, anomalyThreshold
  */
 router.get('/', authenticateToken, dashboardLimiter, dashboardRefreshLimiter, async (req, res, next) => {
   try {
@@ -21,6 +21,7 @@ router.get('/', authenticateToken, dashboardLimiter, dashboardRefreshLimiter, as
       startDate,
       endDate,
       refresh,
+      fresh,
       anomalyThreshold,
       attemptFilter,
       attemptRegion,
@@ -29,7 +30,7 @@ router.get('/', authenticateToken, dashboardLimiter, dashboardRefreshLimiter, as
     const metrics = await calculateDashboardMetrics({
       startDate,
       endDate,
-      refresh: refresh === 'true',
+      refresh: refresh === 'true' || fresh === 'true',
       anomalyThreshold,
       attemptFilter,
       attemptRegion,
@@ -65,11 +66,11 @@ router.get('/period', authenticateToken, dashboardLimiter, async (req, res, next
  */
 router.get('/analytics', authenticateToken, dashboardLimiter, dashboardRefreshLimiter, async (req, res, next) => {
   try {
-    const { startDate, endDate, refresh } = req.query;
+    const { startDate, endDate, refresh, fresh } = req.query;
     const analytics = await getAnalyticsData({
       startDate,
       endDate,
-      refresh: refresh === 'true'
+      refresh: refresh === 'true' || fresh === 'true'
     });
     return res.status(200).json(analytics);
   } catch (error) {

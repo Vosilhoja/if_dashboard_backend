@@ -4,6 +4,7 @@ const { fetchAllRowsForSheet } = require('./googleSheets');
 const { classifyBatch } = require('./statusClassifier');
 const { createSuggestions } = require('./statusSuggestionService');
 const { STATUS_CONFIG, matchesCategory } = require('../utils/statusMatcher');
+const crypto = require('crypto');
 
 const queueName = process.env.STATUS_CLASSIFICATION_QUEUE_NAME || 'status-classifications';
 const enabled = Boolean(process.env.REDIS_URL);
@@ -67,10 +68,26 @@ async function enqueueUnmatchedClassification() {
     if (unmatchedTexts.length === 0) {
       return { jobId: null, uniqueTexts: 0, completed: true };
     }
+    const jobId = `status-${crypto
+      .createHash('sha1')
+      .update(JSON.stringify(unmatchedTexts))
+      .digest('hex')
+      .slice(0, 24)}`;
+    const existingJob = await queue.getJob(jobId);
+    if (existingJob) {
+      const existingState = await existingJob.getState();
+      if (['waiting', 'active', 'delayed', 'paused'].includes(existingState)) {
+        return {
+          jobId: existingJob.id,
+          uniqueTexts: unmatchedTexts.length,
+        };
+      }
+      await existingJob.remove();
+    }
     const job = await queue.add(
       'classify-unmatched',
       { texts: unmatchedTexts },
-      { jobId: `status-${Date.now()}` }
+      { jobId }
     );
     return { jobId: job.id, uniqueTexts: unmatchedTexts.length };
   })();
