@@ -92,6 +92,19 @@ function getPhone(row) {
   );
 }
 
+function getPersonIdentity(row, fallbackPrefix) {
+  const phone = normalizePhoneWithDiagnostics(getPhone(row)).normalized;
+  if (phone) return `phone:${phone}`;
+
+  const userId = getRowValue(
+    row,
+    ['ID пользователя', 'Result id', 'ID', 'id', 'Результат ID'],
+    (key) => /^(идпользователя|resultid|id|результатид)$/.test(key)
+  );
+  const normalizedId = String(userId || '').trim();
+  return normalizedId ? `${fallbackPrefix}:id:${normalizedId}` : '';
+}
+
 function getMainRegistrationDate(row) {
   return getRowValue(row, ['Дата создания', 'Дата регистрации', 'Creation date', 'Registration date', 'Дата', 'Date'], (key) =>
     /(датасоздания|датарегистрац|дата.*заполн|дата.*создан|creationdate|registrationdate|registeredat|createdat)/.test(key)
@@ -629,17 +642,17 @@ async function calculateDashboardMetrics(query: any = {}) {
   // Метрика 3: Зарегистрировано в панели (main_base).
   // The source can contain duplicate rows for one participant.
   let registeredMainVal = 0;
-  const registeredPhonesInPeriod = new Set();
+  const registeredPeopleInPeriod = new Set();
   if (!mainError) {
     for (const row of mainRows) {
       const dateStr = getMainRegistrationDate(row);
       const d = parseSheetDate(dateStr);
       if (isDateInRange(d, startDate, endDate)) {
-        const phone = normalizePhoneWithDiagnostics(getPhone(row)).normalized;
-        if (phone) registeredPhonesInPeriod.add(phone);
+        const identity = getPersonIdentity(row, 'main');
+        if (identity) registeredPeopleInPeriod.add(identity);
       }
     }
-    registeredMainVal = registeredPhonesInPeriod.size;
+    registeredMainVal = registeredPeopleInPeriod.size;
   }
 
   // Метрика 4: Зарегистрировано после контакта с поддержкой
@@ -688,7 +701,7 @@ async function calculateDashboardMetrics(query: any = {}) {
   }
 
   // Метрика 9: Не завершили регистрацию
-  let notCompletedInPeriodCount = 0;
+  const notCompletedPeopleInPeriod = new Set();
   if (!notCompletedError) {
     for (const row of notCompletedRows) {
       const status = String(getRowValue(row, ['Статус', 'Status'], (key) =>
@@ -705,10 +718,12 @@ async function calculateDashboardMetrics(query: any = {}) {
       );
       const d = parseSheetDate(dateStr);
       if (isDateInRange(d, startDate, endDate)) {
-        notCompletedInPeriodCount++;
+        const identity = getPersonIdentity(row, 'not_completed');
+        if (identity) notCompletedPeopleInPeriod.add(identity);
       }
     }
   }
+  const notCompletedInPeriodCount = notCompletedPeopleInPeriod.size;
 
   // Аномалии за последние 4 недели
   let anomalyData = undefined;
