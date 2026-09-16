@@ -7,6 +7,7 @@
     "start": "node dist/server.js",
     "dev": "tsx watch src/server.ts",
     "type-check": "tsc --noEmit",
+    "migrate:learned-phrase-keys": "node src/db/migrateLearnedPhraseKeys.js",
     "test:status": "tsx --test src/services/statusClassifier.test.ts",
     "test:rate-limit": "tsx --test src/middleware/rateLimiter.test.js",
     "test:api": "tsx --test src/api.smoke.test.js",

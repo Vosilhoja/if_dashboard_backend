@@ -129,11 +129,11 @@ async function initDatabase() {
         phrase TEXT NOT NULL,
         is_disabled BOOLEAN NOT NULL DEFAULT FALSE,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE (category_id, phrase)
       );
 
       CREATE INDEX IF NOT EXISTS idx_learned_phrases_category
         ON learned_phrases (category_id);
+
     `);
 
     // Заполнение стандартных ролей в PG

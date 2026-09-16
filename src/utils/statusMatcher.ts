@@ -5,11 +5,21 @@ const { pool, isPgConnected } = require('../db');
 
 const CACHE_TTL_MS = 30_000;
 let learnedCache = { byCategory: new Map(), disabled: new Map(), loadedAt: 0 };
+const NORMALIZED_PHRASE_SQL = `
+  lower(
+    btrim(
+      regexp_replace(
+        regexp_replace(phrase, $$[\`'’‘ʻʽʼ′_]$$, ' ', 'g'),
+        $$\\s+$$, ' ', 'g'
+      )
+    )
+  )
+`;
 
 function phraseKey(phrase) {
   return String(phrase || '')
     .toLowerCase()
-    .replace(/[`'’ʻʽ_]/g, ' ')
+    .replace(/[`'’‘ʻʽʼ′_]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -96,26 +106,46 @@ async function updateLearnedPhrase(categoryId, phrase, action = 'add') {
 
   {
     const category = getStatusCategory(categoryId);
-    const systemPhrase = category.phrases.find((item) => item.toLowerCase() === normalizedPhrase.toLowerCase());
+    const systemPhrase = category.phrases.find((item) => phraseKey(item) === phraseKey(normalizedPhrase));
     if (action === 'remove' && systemPhrase) {
-      await pool.query(
-        `INSERT INTO learned_phrases (category_id, phrase, is_disabled)
-         VALUES ($1, $2, TRUE)
-         ON CONFLICT (category_id, phrase) DO UPDATE SET is_disabled = TRUE`,
-        [categoryId, systemPhrase]
+      const existing = await pool.query(
+        `SELECT id FROM learned_phrases
+         WHERE category_id = $1
+           AND ${NORMALIZED_PHRASE_SQL} = $2
+         ORDER BY id LIMIT 1`,
+        [categoryId, phraseKey(systemPhrase)]
       );
+      if (existing.rows[0]) {
+        await pool.query('UPDATE learned_phrases SET is_disabled = TRUE WHERE id = $1', [existing.rows[0].id]);
+      } else {
+        await pool.query(
+          `INSERT INTO learned_phrases (category_id, phrase, is_disabled) VALUES ($1, $2, TRUE)`,
+          [categoryId, systemPhrase]
+        );
+      }
     } else if (action === 'remove') {
       await pool.query(
-        'DELETE FROM learned_phrases WHERE category_id = $1 AND LOWER(phrase) = LOWER($2)',
-        [categoryId, normalizedPhrase]
+        `DELETE FROM learned_phrases
+         WHERE category_id = $1
+           AND ${NORMALIZED_PHRASE_SQL} = $2`,
+        [categoryId, phraseKey(normalizedPhrase)]
       );
     } else {
-      await pool.query(
-        `INSERT INTO learned_phrases (category_id, phrase, is_disabled)
-         VALUES ($1, $2, FALSE)
-         ON CONFLICT (category_id, phrase) DO UPDATE SET is_disabled = FALSE`,
-        [categoryId, normalizedPhrase]
+      const existing = await pool.query(
+        `SELECT id FROM learned_phrases
+         WHERE category_id = $1
+           AND ${NORMALIZED_PHRASE_SQL} = $2
+         ORDER BY id LIMIT 1`,
+        [categoryId, phraseKey(normalizedPhrase)]
       );
+      if (existing.rows[0]) {
+        await pool.query('UPDATE learned_phrases SET is_disabled = FALSE WHERE id = $1', [existing.rows[0].id]);
+      } else {
+        await pool.query(
+          `INSERT INTO learned_phrases (category_id, phrase, is_disabled) VALUES ($1, $2, FALSE)`,
+          [categoryId, normalizedPhrase]
+        );
+      }
     }
     await loadLearnedPhrasesFromDb();
     return getEditableStatusCategories().find((category) => category.id === categoryId);
@@ -136,29 +166,40 @@ async function renameLearnedPhrase(categoryId, oldPhrase, newPhrase) {
 
   {
     const category = getStatusCategory(categoryId);
-    const systemPhrase = category.phrases.find((item) => item.toLowerCase() === oldValue.toLowerCase());
-    if (!systemPhrase && !getStatusPhrases(category).some((item) => item.toLowerCase() === oldValue.toLowerCase())) {
+    const systemPhrase = category.phrases.find((item) => phraseKey(item) === phraseKey(oldValue));
+    if (!systemPhrase && !getStatusPhrases(category).some((item) => phraseKey(item) === phraseKey(oldValue))) {
       throw new Error('Фраза не найдена');
     }
     if (systemPhrase) {
       await pool.query(
-        `INSERT INTO learned_phrases (category_id, phrase, is_disabled)
-         VALUES ($1, $2, TRUE)
-         ON CONFLICT (category_id, phrase) DO UPDATE SET is_disabled = TRUE`,
-        [categoryId, systemPhrase]
+        `UPDATE learned_phrases SET is_disabled = TRUE
+         WHERE category_id = $1
+           AND ${NORMALIZED_PHRASE_SQL} = $2`,
+        [categoryId, phraseKey(systemPhrase)]
       );
     } else {
       await pool.query(
-        'DELETE FROM learned_phrases WHERE category_id = $1 AND LOWER(phrase) = LOWER($2)',
-        [categoryId, oldValue]
+        `DELETE FROM learned_phrases
+         WHERE category_id = $1
+           AND ${NORMALIZED_PHRASE_SQL} = $2`,
+        [categoryId, phraseKey(oldValue)]
       );
     }
-    await pool.query(
-      `INSERT INTO learned_phrases (category_id, phrase, is_disabled)
-       VALUES ($1, $2, FALSE)
-       ON CONFLICT (category_id, phrase) DO UPDATE SET is_disabled = FALSE`,
-      [categoryId, newValue]
+    const existing = await pool.query(
+      `SELECT id FROM learned_phrases
+       WHERE category_id = $1
+         AND ${NORMALIZED_PHRASE_SQL} = $2
+       ORDER BY id LIMIT 1`,
+      [categoryId, phraseKey(newValue)]
     );
+    if (existing.rows[0]) {
+      await pool.query('UPDATE learned_phrases SET phrase = $1, is_disabled = FALSE WHERE id = $2', [newValue, existing.rows[0].id]);
+    } else {
+      await pool.query(
+        `INSERT INTO learned_phrases (category_id, phrase, is_disabled) VALUES ($1, $2, FALSE)`,
+        [categoryId, newValue]
+      );
+    }
     await loadLearnedPhrasesFromDb();
     return getEditableStatusCategories().find((category) => category.id === categoryId);
   }
@@ -172,9 +213,7 @@ const STATUS_CONFIG = {
     description: 'Ссылка на регистрацию отправлена абоненту',
     phrases: [
       'silka yuborildi',
-      'silka_yuborildi',
       'silka yuborilgan',
-      'silka_yuborilgan',
       'yubordik',
       'sms yuborildi',
       'raqamga silka yuborildi',
@@ -191,7 +230,6 @@ const STATUS_CONFIG = {
       'povtor',
       'povtoriy',
       'povtoran',
-      'qayta malumot berildi',
       'qayta silka',
       'qayta yuborildi',
       'qayta yuborilgan',
@@ -220,11 +258,6 @@ const STATUS_CONFIG = {
       'снова',
       'qayta malumot berildi',
       'qayta ma`lumot berildi',
-      'qayta ma\'lumot berildi',
-      'qayta aloqa',
-      'qayta telefon',
-      'qayta qo`ngiroq',
-      'qayta qongiroq',
       'uchirgan qayta malumot berildi',
       'xato qilgan qayta urinadi',
     ],
@@ -244,15 +277,11 @@ const STATUS_CONFIG = {
       'otkaxz',
       "foydalanmasligini aytdi",
       "vaqti yo'q",
-      'vaqti yo`q',
       'vaqti yoq',
       "o'chirib qo'ydi",
-      'o`chirib qo`ydi',
       'учириб куйди',
       'ishtirok etmagan',
-      'sms ketmadi',
       "o'ylab ko'radi",
-      'o`ylab ko`radi',
       'keyinroq',
       'keyinro',
       'yilida to`xtagan',
@@ -287,12 +316,10 @@ const STATUS_CONFIG = {
       '18 00 dan keyin',
       'yarimm soat',
       'raqamni kiritishga tushunmagan',
-      'ro`yxatdan o`tishda raqamini kiritishga tushunmagan',
       'noma`lum silka xohlamadi',
       'ro`yxatdan o`tishda raqamini kiritishga tushunmagan',
       'o`chirdi',
       'otklyuchil',
-      'vaqti yo`q',
     ],
     maxDistance: 2,
   },
@@ -304,14 +331,11 @@ const STATUS_CONFIG = {
       'bot bor',
       'botdan o`zi ro`yxatdan o`tishini aytdi',
       "botdan ro'yxatdan o'tdik",
-      'botdan ro`yxatdan o`tdik',
       'руйхатдан уттик',
-      "botdan ro'yxatdan o'tdi",
       "o'zi ro'yxatdan o'tishini aytdi",
       'botdan ro`yxatdan o`tgan',
       'botdan ro`yxatdan o`tdi',
       'botdan ro`yxatdan o`tish',
-      'ro`yxatdan o`zi o`tadi',
       'ro`yxatdan o`zi o`tadi',
       'sms orqali ro`yxatdan o`tdi',
       'telegramdan kirdi',
@@ -338,16 +362,12 @@ const STATUS_CONFIG = {
     name: 'Не тот человек / номер',
     description: 'Номер принадлежит другому человеку или зарегистрирован с другого номера',
     phrases: [
-      'boshqa raqamidan ro`yxatdan o`tgan',
       'boshqa odam',
-      'raqam egasi boshqa',
       'иккинчи раками',
       'boshqa raqamlaridan ro`yxatdan o`tgan',
-      'boshqa raqamidan ro`yxatdan o`tgan',
       'boshqa raqamdan ro`yxatdan otgan',
       'boshqa raqamidan botdan ro`yxatdan o`tgan',
       'boshqa raqamidan ro`yhatdan o`tgan',
-      'raqam egasi boshqa',
       'raqam turmush o`rtog`iga tegishli',
       'singlisi foydalangan',
       'turmush o`rtog`i foydalangan',
@@ -409,7 +429,7 @@ function normalizeText(text) {
   if (!text) return '';
   return String(text)
     .toLowerCase()
-    .replace(/[`'’ʻʽ_]/g, ' ')
+    .replace(/[`'’‘ʻʽʼ′_]/g, ' ')
     .replace(/[^\w\sа-яёўқғҳ]/gi, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -522,6 +542,7 @@ function isWrongPersonStatus(comment, cfg) {
 
 module.exports = {
   STATUS_CONFIG,
+  phraseKey,
   normalizeText,
   collapseRepeatedChars,
   levenshteinDistance,
