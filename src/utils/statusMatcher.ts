@@ -6,6 +6,14 @@ const { pool, isPgConnected } = require('../db');
 const CACHE_TTL_MS = 30_000;
 let learnedCache = { byCategory: new Map(), disabled: new Map(), loadedAt: 0 };
 
+function phraseKey(phrase) {
+  return String(phrase || '')
+    .toLowerCase()
+    .replace(/[`'’ʻʽ_]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 async function loadLearnedPhrasesFromDb() {
   if (!isPgConnected() || !pool) return false;
   const result = await pool.query('SELECT category_id, phrase, is_disabled FROM learned_phrases');
@@ -14,10 +22,10 @@ async function loadLearnedPhrasesFromDb() {
   for (const row of result.rows) {
     if (row.is_disabled) {
       if (!disabled.has(row.category_id)) disabled.set(row.category_id, new Set());
-      disabled.get(row.category_id).add(String(row.phrase).toLowerCase());
+      disabled.get(row.category_id).add(phraseKey(row.phrase));
     } else {
       if (!byCategory.has(row.category_id)) byCategory.set(row.category_id, []);
-      byCategory.get(row.category_id).push(row.phrase);
+      byCategory.get(row.category_id).push(String(row.phrase).trim());
     }
   }
   learnedCache = { byCategory, disabled, loadedAt: Date.now() };
@@ -35,12 +43,23 @@ function getStatusPhrases(category) {
       });
     }
     const disabled = learnedCache.disabled.get(category.id) || new Set();
-    return [
-      ...category.phrases.filter((phrase) => !disabled.has(String(phrase).toLowerCase())),
+    const phrases = [
+      ...category.phrases.filter((phrase) => !disabled.has(phraseKey(phrase))),
       ...(learnedCache.byCategory.get(category.id) || []),
     ];
+    const unique = new Map();
+    for (const phrase of phrases) {
+      const key = phraseKey(phrase);
+      if (key && !unique.has(key)) unique.set(key, phrase);
+    }
+    return [...unique.values()];
   }
-  return category.phrases;
+  const unique = new Map();
+  for (const phrase of category.phrases) {
+    const key = phraseKey(phrase);
+    if (key && !unique.has(key)) unique.set(key, phrase);
+  }
+  return [...unique.values()];
 }
 
 function getStatusCategory(categoryId) {

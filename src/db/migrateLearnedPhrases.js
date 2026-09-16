@@ -1,9 +1,11 @@
 const fs = require('fs');
-const path = require('path');
 const { initDatabase, pool, isPgConnected } = require('./index');
 
 async function migrate() {
-  const sourcePath = process.argv[2] || path.join(__dirname, '..', 'config', 'learned-phrases.json');
+  const sourcePath = process.argv[2];
+  if (!sourcePath) {
+    throw new Error('Pass an external learned-phrases JSON path as the first argument');
+  }
   const dictionary = JSON.parse(fs.readFileSync(sourcePath, 'utf8'));
 
   await initDatabase();
