@@ -30,10 +30,21 @@ const queue = enabled
 let enqueueInFlight = null;
 
 function statusText(row) {
-  return String(
-    row['Коментарий'] || row['Комментарий'] || row['Статус'] ||
-    row['Status'] || row['status'] || row.comment || row.Comment || ''
-  ).trim();
+  const entries = Object.entries(row || {});
+  const commentEntry = entries.find(([key]) =>
+    /^(коментарий|комментарий|comment|status comment|результат звонка)$/i.test(String(key).trim())
+  ) || entries.find(([key]) =>
+    /(комментар|коментар|comment|результат|result|outcome)/i.test(String(key))
+      && !/(статус.?звонка|call.?status)/i.test(String(key))
+  );
+
+  const comment = String(commentEntry?.[1] ?? '').trim();
+  if (comment) return comment;
+
+  // The numeric value in "Статус звонка" is a code, not a phrase.
+  // Do not enqueue codes such as "4" as unmatched text.
+  const fallback = row['Статус'] ?? row['Status'] ?? row['status'] ?? '';
+  return /^\d+$/.test(String(fallback).trim()) ? '' : String(fallback).trim();
 }
 
 async function enqueueUnmatchedClassification() {

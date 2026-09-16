@@ -20,7 +20,7 @@ let aiClassifierOverride = null;
 function normalizeText(text) {
   return String(text || '')
     .toLowerCase()
-    .replace(/[`'’ʻʽ_]/g, ' ')
+    .replace(/[`'’‘ʻʽʼ′_]/g, ' ')
     .replace(/[^\w\sа-яёўқғҳ]/gi, ' ')
     .replace(/\s+/g, ' ')
     .trim();

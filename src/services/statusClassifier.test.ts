@@ -15,6 +15,20 @@ test('rule hit does not call AI', async () => {
   assert.equal(calls, 0);
 });
 
+test('normalizes all supported apostrophe variants consistently', () => {
+  const values = [
+    "ro'yxatdan",
+    'ro‘yxatdan',
+    'roʻyxatdan',
+    'roʼyxatdan',
+    'ro′yxatdan',
+    'ro`yxatdan',
+  ];
+  const normalized = values.map((value) => classifier.normalizedText(value));
+  assert.equal(new Set(normalized).size, 1);
+  assert.equal(normalized[0], 'ro yxatdan');
+});
+
 test('memory cache hit does not call AI twice', async () => {
   let calls = 0;
   classifier.setAiClassifierForTests(async () => {

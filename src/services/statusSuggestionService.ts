@@ -58,6 +58,10 @@ async function approveSuggestion(id) {
 
 async function listPendingSuggestions() {
   if (!isPgConnected()) return [];
+  // A queued classification may finish after the worker's finalization step
+  // or after a process restart. Materialize unknown classifications on read
+  // so the admin UI cannot miss a valid suggestion.
+  await createSuggestions();
   const result = await query(
     `SELECT id, phrase, occurrences, created_at
      FROM suggested_phrases
