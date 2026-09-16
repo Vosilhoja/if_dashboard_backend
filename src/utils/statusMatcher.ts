@@ -16,6 +16,38 @@ function getLearnedPhrases(categoryId) {
   }
 }
 
+function readLearnedDictionary() {
+  try {
+    return JSON.parse(fs.readFileSync(learnedPhrasesPath, 'utf8'));
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    return {};
+  }
+}
+
+/**
+ * @param {{id: string, phrases: string[]}} category
+ */
+function getStatusPhrases(category) {
+  const dictionary = readLearnedDictionary();
+  const disabled = Array.isArray(dictionary._disabled?.[category.id])
+    ? dictionary._disabled[category.id]
+    : [];
+  const disabledSet = new Set(disabled.map((phrase) => String(phrase).toLowerCase()));
+  return [
+    ...category.phrases.filter((phrase) => !disabledSet.has(String(phrase).toLowerCase())),
+    ...getLearnedPhrases(category.id),
+  ];
+}
+
+function getStatusCategory(categoryId) {
+  const category = Object.values(STATUS_CONFIG).find((item) => 'id' in item && item.id === categoryId);
+  if (!category || !('id' in category) || !('phrases' in category)) {
+    throw new Error('Неизвестная категория статуса');
+  }
+  return category;
+}
+
 function getEditableStatusCategories() {
   return Object.values(STATUS_CONFIG).reduce((categories, category) => {
     if (!('id' in category) || !('phrases' in category)) return categories;
@@ -23,8 +55,8 @@ function getEditableStatusCategories() {
       id: category.id,
       name: category.name,
       description: category.description,
-      phrases: [...category.phrases, ...getLearnedPhrases(category.id)],
-      editablePhrases: getLearnedPhrases(category.id),
+      phrases: getStatusPhrases(category),
+      editablePhrases: getStatusPhrases(category),
     });
     return categories;
   }, []);
@@ -39,19 +71,26 @@ function updateLearnedPhrase(categoryId, phrase, action = 'add') {
     throw new Error('Вариант статуса должен содержать от 1 до 120 символов');
   }
 
-  let dictionary = {};
-  try {
-    dictionary = JSON.parse(fs.readFileSync(learnedPhrasesPath, 'utf8'));
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-  }
+  const dictionary = readLearnedDictionary();
   dictionary[categoryId] = Array.isArray(dictionary[categoryId]) ? dictionary[categoryId] : [];
-  const index = dictionary[categoryId].findIndex(
+  const customIndex = dictionary[categoryId].findIndex(
     (item) => String(item).toLowerCase() === normalizedPhrase.toLowerCase()
   );
   if (action === 'remove') {
-    if (index >= 0) dictionary[categoryId].splice(index, 1);
-  } else if (index < 0) {
+    if (customIndex >= 0) {
+      dictionary[categoryId].splice(customIndex, 1);
+    } else {
+      const category = getStatusCategory(categoryId);
+      const systemPhrase = category.phrases.find((item) => String(item).toLowerCase() === normalizedPhrase.toLowerCase());
+      if (systemPhrase) {
+        dictionary._disabled = dictionary._disabled || {};
+        dictionary._disabled[categoryId] = Array.isArray(dictionary._disabled[categoryId]) ? dictionary._disabled[categoryId] : [];
+        if (!dictionary._disabled[categoryId].some((item) => String(item).toLowerCase() === normalizedPhrase.toLowerCase())) {
+          dictionary._disabled[categoryId].push(systemPhrase);
+        }
+      }
+    }
+  } else if (customIndex < 0 && !getStatusPhrases(getStatusCategory(categoryId)).some((item) => item.toLowerCase() === normalizedPhrase.toLowerCase())) {
     dictionary[categoryId].push(normalizedPhrase);
   }
   fs.writeFileSync(learnedPhrasesPath, `${JSON.stringify(dictionary, null, 2)}\n`, 'utf8');
@@ -68,19 +107,23 @@ function renameLearnedPhrase(categoryId, oldPhrase, newPhrase) {
     throw new Error('Вариант статуса должен содержать от 1 до 120 символов');
   }
 
-  let dictionary = {};
-  try {
-    dictionary = JSON.parse(fs.readFileSync(learnedPhrasesPath, 'utf8'));
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-  }
+  const dictionary = readLearnedDictionary();
   const phrases = Array.isArray(dictionary[categoryId]) ? dictionary[categoryId] : [];
   const index = phrases.findIndex((item) => String(item).toLowerCase() === oldValue.toLowerCase());
-  if (index < 0) throw new Error('Изменять можно только пользовательские фразы');
-  if (phrases.some((item, itemIndex) => itemIndex !== index && String(item).toLowerCase() === newValue.toLowerCase())) {
+  const category = getStatusCategory(categoryId);
+  const systemIndex = category.phrases.findIndex((item) => String(item).toLowerCase() === oldValue.toLowerCase());
+  if (index < 0 && systemIndex < 0) throw new Error('Фраза не найдена');
+  if (getStatusPhrases(category).some((item) => item.toLowerCase() === newValue.toLowerCase() && item.toLowerCase() !== oldValue.toLowerCase())) {
     throw new Error('Такая фраза уже существует в этой категории');
   }
-  phrases[index] = newValue;
+  if (index >= 0) {
+    phrases[index] = newValue;
+  } else {
+    dictionary._disabled = dictionary._disabled || {};
+    dictionary._disabled[categoryId] = Array.isArray(dictionary._disabled[categoryId]) ? dictionary._disabled[categoryId] : [];
+    dictionary._disabled[categoryId].push(oldValue);
+    phrases.push(newValue);
+  }
   dictionary[categoryId] = phrases;
   fs.writeFileSync(learnedPhrasesPath, `${JSON.stringify(dictionary, null, 2)}\n`, 'utf8');
   return getEditableStatusCategories().find((category) => category.id === categoryId);
@@ -401,7 +444,7 @@ function matchesCategory(rawText, category) {
     }
   }
 
-  for (const phrase of (category.phrases || [])) {
+  for (const phrase of getStatusPhrases(category)) {
     const normPhrase = normalizeText(phrase);
     if (!normPhrase) continue;
     const collapsedPhrase = collapseRepeatedChars(normPhrase);

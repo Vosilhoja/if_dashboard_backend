@@ -31,16 +31,16 @@ router.delete('/statuses/phrases', authenticateToken, authorizeRoles('super_admi
     return res.json({
       category: updateLearnedPhrase(categoryId, phrase, 'remove'),
     });
+  } catch (error) {
+    next(error);
+  }
+});
 
-    router.put('/statuses/phrases', authenticateToken, authorizeRoles('super_admin', 'admin'), (req, res, next) => {
-      try {
-        const { categoryId, oldPhrase, newPhrase } = req.body || {};
-        return res.json({
-          category: renameLearnedPhrase(categoryId, oldPhrase, newPhrase),
-        });
-      } catch (error) {
-        next(error);
-      }
+router.put('/statuses/phrases', authenticateToken, authorizeRoles('super_admin', 'admin'), (req, res, next) => {
+  try {
+    const { categoryId, oldPhrase, newPhrase } = req.body || {};
+    return res.json({
+      category: renameLearnedPhrase(categoryId, oldPhrase, newPhrase),
     });
   } catch (error) {
     next(error);
