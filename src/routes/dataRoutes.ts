@@ -47,7 +47,7 @@ router.get('/', authenticateToken, dashboardLimiter, dashboardRefreshLimiter, as
  * Детальная выборка строк звонков и незавершивших регистрацию за период
  * Query params: start, end (или startDate, endDate)
  */
-router.get('/period', authenticateToken, async (req, res, next) => {
+router.get('/period', authenticateToken, dashboardLimiter, async (req, res, next) => {
   try {
     const startDate = req.query.start || req.query.startDate || '';
     const endDate = req.query.end || req.query.endDate || '';
@@ -63,7 +63,7 @@ router.get('/period', authenticateToken, async (req, res, next) => {
  * GET /api/data/analytics
  * Демографическая аналитика и агрегаты (пол, возраст, регионы, образования)
  */
-router.get('/analytics', authenticateToken, dashboardLimiter, async (req, res, next) => {
+router.get('/analytics', authenticateToken, dashboardLimiter, dashboardRefreshLimiter, async (req, res, next) => {
   try {
     const { startDate, endDate, refresh } = req.query;
     const analytics = await getAnalyticsData({
@@ -138,7 +138,7 @@ router.get('/settings-info', authenticateToken, (req, res) => {
  * GET /api/data/sheets/:type
  * Пагинация и поиск по сырым таблицам (main, numbers, eskiz, not_completed)
  */
-router.get('/sheets/:type', authenticateToken, async (req, res, next) => {
+router.get('/sheets/:type', authenticateToken, dashboardLimiter, dashboardRefreshLimiter, async (req, res, next) => {
   try {
     const { type } = req.params;
     const page = Math.max(1, parseInt(req.query.page || '1', 10));

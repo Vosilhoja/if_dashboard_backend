@@ -8,7 +8,9 @@
     "dev": "tsx watch src/server.ts",
     "type-check": "tsc --noEmit",
     "test:status": "tsx --test src/services/statusClassifier.test.ts",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test:rate-limit": "tsx --test src/middleware/rateLimiter.test.js",
+    "test:api": "tsx --test src/api.smoke.test.js",
+    "test": "npm run test:status && npm run test:rate-limit && npm run test:api"
   },
   "keywords": [],
   "author": "",
