@@ -24,7 +24,9 @@ async function materializeLiveUnknownSuggestions() {
   if (Date.now() - lastLiveScanAt < 30_000) return;
 
   liveScanInFlight = (async () => {
-    const rows = await fetchAllRowsForSheet('numbers', false);
+    // Read the source sheet itself on the first check after the cooldown.
+    // This prevents suggestions from being built from an old in-process snapshot.
+    const rows = await fetchAllRowsForSheet('numbers', true);
     const categories = Object.values(STATUS_CONFIG as Record<string, any>)
       .filter((category) => category?.id && category?.phrases);
     const counts = new Map();
