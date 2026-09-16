@@ -39,7 +39,8 @@ function statusText(row) {
       && !/(статус.?звонка|call.?status)/i.test(String(key))
   );
 
-  const comment = String(commentEntry?.[1] ?? '').trim();
+  const columnD = Object.values(row || {})[3];
+  const comment = String(commentEntry?.[1] || columnD || '').trim();
   if (comment) return comment;
 
   // The numeric value in "Статус звонка" is a code, not a phrase.

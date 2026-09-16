@@ -13,7 +13,8 @@ function getCommentText(row) {
     /(комментар|коментар|comment|результат|result|outcome)/i.test(String(key))
       && !/(статус.?звонка|call.?status)/i.test(String(key))
   );
-  const text = String(entry?.[1] ?? '').trim().replace(/\s+/g, ' ');
+  const columnD = Object.values(row || {})[3];
+  const text = String(entry?.[1] || columnD || '').trim().replace(/\s+/g, ' ');
   return text || '';
 }
 
