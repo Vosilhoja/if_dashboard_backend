@@ -16,6 +16,48 @@ function getLearnedPhrases(categoryId) {
   }
 }
 
+function getEditableStatusCategories() {
+  return Object.values(STATUS_CONFIG).reduce((categories, category) => {
+    if (!('id' in category) || !('phrases' in category)) return categories;
+    categories.push({
+      id: category.id,
+      name: category.name,
+      description: category.description,
+      phrases: [...category.phrases, ...getLearnedPhrases(category.id)],
+      editablePhrases: getLearnedPhrases(category.id),
+    });
+    return categories;
+  }, []);
+}
+
+function updateLearnedPhrase(categoryId, phrase, action = 'add') {
+  if (!getEditableStatusCategories().some((category) => category.id === categoryId)) {
+    throw new Error('Неизвестная категория статуса');
+  }
+  const normalizedPhrase = String(phrase || '').trim().replace(/\s+/g, ' ');
+  if (!normalizedPhrase || normalizedPhrase.length > 120) {
+    throw new Error('Вариант статуса должен содержать от 1 до 120 символов');
+  }
+
+  let dictionary = {};
+  try {
+    dictionary = JSON.parse(fs.readFileSync(learnedPhrasesPath, 'utf8'));
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  dictionary[categoryId] = Array.isArray(dictionary[categoryId]) ? dictionary[categoryId] : [];
+  const index = dictionary[categoryId].findIndex(
+    (item) => String(item).toLowerCase() === normalizedPhrase.toLowerCase()
+  );
+  if (action === 'remove') {
+    if (index >= 0) dictionary[categoryId].splice(index, 1);
+  } else if (index < 0) {
+    dictionary[categoryId].push(normalizedPhrase);
+  }
+  fs.writeFileSync(learnedPhrasesPath, `${JSON.stringify(dictionary, null, 2)}\n`, 'utf8');
+  return getEditableStatusCategories().find((category) => category.id === categoryId);
+}
+
 const STATUS_CONFIG = {
   linkSent: {
     id: 'link_sent',
@@ -385,6 +427,8 @@ function isWrongPersonStatus(comment, cfg) {
 
 module.exports = {
   STATUS_CONFIG,
+  getEditableStatusCategories,
+  updateLearnedPhrase,
   isLinkSentStatus,
   isRepeatSentStatus,
   isDeclinedStatus,

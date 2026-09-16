@@ -4,6 +4,36 @@ const { authenticateToken, authorizeRoles } = require('../middleware/auth');
 const { adminStatusLimiter } = require('../middleware/rateLimiter');
 const { enqueueUnmatchedClassification } = require('../services/statusClassificationQueue');
 const { approveSuggestion } = require('../services/statusSuggestionService');
+const {
+  getEditableStatusCategories,
+  updateLearnedPhrase,
+} = require('../utils/statusMatcher');
+
+router.get('/statuses', authenticateToken, authorizeRoles('super_admin', 'admin'), (req, res) => {
+  return res.json({ categories: getEditableStatusCategories() });
+});
+
+router.post('/statuses/phrases', authenticateToken, authorizeRoles('super_admin', 'admin'), (req, res, next) => {
+  try {
+    const { categoryId, phrase } = req.body || {};
+    return res.status(201).json({
+      category: updateLearnedPhrase(categoryId, phrase, 'add'),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.delete('/statuses/phrases', authenticateToken, authorizeRoles('super_admin', 'admin'), (req, res, next) => {
+  try {
+    const { categoryId, phrase } = req.body || {};
+    return res.json({
+      category: updateLearnedPhrase(categoryId, phrase, 'remove'),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
 
 router.post('/classify-unmatched', authenticateToken, authorizeRoles('super_admin', 'admin'), adminStatusLimiter, async (req, res, next) => {
   try {
