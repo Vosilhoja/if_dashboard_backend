@@ -330,6 +330,34 @@ function getEffectiveSheetRowCount(rawCount, loadedRowsLength = 0) {
 
 async function getSheetSummary(type, refresh = false) {
   const cacheKey = `sheet_${type}`;
+
+  // The settings page uses `fresh=true` for an explicit "load fully" check.
+  // Refresh the same snapshot used by dashboard metrics instead of relying
+  // on Google Sheets' grid rowCount, which can include empty/stale rows.
+  if (refresh) {
+    const data = await fetchAllRowsForSheet(type, true);
+    return {
+      type,
+      total: data.length,
+      cachedAt: cache[cacheKey]?.timestamp
+        ? new Date(cache[cacheKey].timestamp).toISOString()
+        : null,
+      refreshing: false,
+    };
+  }
+
+  const cachedData = cache[cacheKey]?.data;
+  if (cachedData) {
+    return {
+      type,
+      total: cachedData.length,
+      cachedAt: cache[cacheKey]?.timestamp
+        ? new Date(cache[cacheKey].timestamp).toISOString()
+        : null,
+      refreshing: false,
+    };
+  }
+
   const auth = getJwtClient();
   const sheetId = getSheetId(type);
   const doc = new GoogleSpreadsheet(sheetId, auth);
@@ -344,10 +372,9 @@ async function getSheetSummary(type, refresh = false) {
   }
   if (!sheet) throw new Error(`Лист не найден в документе Google Таблицы для "${type}"`);
 
-  const total = getEffectiveSheetRowCount(sheet.rowCount, cache[cacheKey]?.data?.length || 0);
   return {
     type,
-    total,
+    total: getEffectiveSheetRowCount(sheet.rowCount),
     cachedAt: cache[cacheKey]?.timestamp
       ? new Date(cache[cacheKey].timestamp).toISOString()
       : null,
