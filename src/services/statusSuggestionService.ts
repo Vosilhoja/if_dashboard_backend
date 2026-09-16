@@ -18,10 +18,13 @@ function getCommentText(row) {
   return text || '';
 }
 
-async function materializeLiveUnknownSuggestions() {
+async function materializeLiveUnknownSuggestions(forceRefresh = false) {
   if (!isPgConnected()) return;
-  if (liveScanInFlight) return liveScanInFlight;
-  if (Date.now() - lastLiveScanAt < 30_000) return;
+  if (liveScanInFlight) {
+    await liveScanInFlight;
+    if (!forceRefresh) return;
+  }
+  if (!forceRefresh && Date.now() - lastLiveScanAt < 30_000) return;
 
   liveScanInFlight = (async () => {
     // Read the source sheet itself on the first check after the cooldown.
@@ -110,9 +113,9 @@ async function approveSuggestion(id) {
   return suggestion;
 }
 
-async function listPendingSuggestions() {
+async function listPendingSuggestions(forceRefresh = false) {
   if (!isPgConnected()) return [];
-  await materializeLiveUnknownSuggestions();
+  await materializeLiveUnknownSuggestions(forceRefresh);
   // A queued classification may finish after the worker's finalization step
   // or after a process restart. Materialize unknown classifications on read
   // so the admin UI cannot miss a valid suggestion.

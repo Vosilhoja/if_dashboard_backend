@@ -16,7 +16,12 @@ router.get('/statuses', authenticateToken, authorizeRoles('super_admin', 'admin'
 
 router.get('/statuses/suggestions', authenticateToken, authorizeRoles('super_admin', 'admin'), async (req, res, next) => {
   try {
-    return res.json({ suggestions: await listPendingSuggestions() });
+    return res.json({
+      source: 'google_sheets',
+      sheet: 'numbers',
+      commentColumn: 'Коментарий (D)',
+      suggestions: await listPendingSuggestions(req.query.fresh === 'true'),
+    });
   } catch (error) {
     next(error);
   }
