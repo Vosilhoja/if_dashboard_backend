@@ -63,14 +63,17 @@ function startStatusClassifierWorker() {
   }
   const worker = new Worker(queueName, async (job) => {
     const texts = Array.isArray(job.data?.texts) ? job.data.texts : [];
-    const batchSize = Number(process.env.STATUS_CLASSIFICATION_BATCH_SIZE || 20);
+    const batchSize = Number(process.env.STATUS_CLASSIFICATION_BATCH_SIZE || 10);
     let classified = 0;
+    await job.updateProgress({ completed: 0, total: texts.length });
     for (let i = 0; i < texts.length; i += batchSize) {
       const batch = texts.slice(i, i + batchSize);
       await classifyBatch(batch);
       classified += batch.length;
+      await job.updateProgress({ completed: classified, total: texts.length });
       if (i + batchSize < texts.length) {
-        await new Promise((resolve) => setTimeout(resolve, Number(process.env.STATUS_CLASSIFICATION_BATCH_DELAY_MS || 1000)));
+        const delayMs = Number(process.env.STATUS_CLASSIFICATION_BATCH_DELAY_MS || 0);
+        if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
       }
     }
     const suggestions = await createSuggestions();
