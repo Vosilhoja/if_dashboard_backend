@@ -683,6 +683,13 @@ async function calculateDashboardMetrics(query: any = {}) {
   }
 
   // Метрика 4: Зарегистрировано после контакта с поддержкой
+  const SUPPORT_ATTRIBUTION_WINDOW_DAYS = 3;
+  const supportAttributionDiagnostics = {
+    matchedByCleanStatus: 0,
+    matchedByDateHeuristic: 0,
+    excludedPreExisting: 0,
+    excludedAmbiguousNoRegDate: 0,
+  };
   const matchedPhonesSupport = new Set();
   const calledUniquePhones = new Set(
     numbersInPeriod
@@ -693,15 +700,42 @@ async function calculateDashboardMetrics(query: any = {}) {
     for (const row of numbersInPeriod) {
       const pDiag = normalizePhoneWithDiagnostics(getPhone(row));
       const p = pDiag.normalized;
+      if (!p || !mainPhones.has(p)) continue;
       const comment = getCallStatus(row);
-      if (
-        p &&
-        mainPhones.has(p) &&
-        mainHasNonBotRegistration.has(p) &&
-        !isAlreadyRegisteredStatus(comment, STATUS_CONFIG.alreadyRegistered) &&
-        !isWrongPersonStatus(comment, STATUS_CONFIG.wrongPerson)
-      ) {
+      if (isWrongPersonStatus(comment, STATUS_CONFIG.wrongPerson)) continue;
+
+      const isAmbiguousAlreadyReg = isAlreadyRegisteredStatus(
+        comment,
+        STATUS_CONFIG.alreadyRegistered
+      );
+      if (!isAmbiguousAlreadyReg && mainHasNonBotRegistration.has(p)) {
         matchedPhonesSupport.add(p);
+        supportAttributionDiagnostics.matchedByCleanStatus++;
+        continue;
+      }
+
+      if (!isAmbiguousAlreadyReg) continue;
+
+      const callDate = parseSheetDate(getCallDate(row));
+      const registrations = mainRegistrationsByPhone.get(p) || [];
+      if (!callDate || registrations.length === 0) {
+        supportAttributionDiagnostics.excludedAmbiguousNoRegDate++;
+        continue;
+      }
+
+      const plausibleResultOfThisCall = registrations.some((registration) => {
+        if (registration.fromBot || registration.sourceUnknown) return false;
+        const diffDays = Math.round(
+          (registration.date.getTime() - callDate.getTime()) / (1000 * 60 * 60 * 24)
+        );
+        return diffDays >= 0 && diffDays <= SUPPORT_ATTRIBUTION_WINDOW_DAYS;
+      });
+
+      if (plausibleResultOfThisCall) {
+        matchedPhonesSupport.add(p);
+        supportAttributionDiagnostics.matchedByDateHeuristic++;
+      } else {
+        supportAttributionDiagnostics.excludedPreExisting++;
       }
     }
   }
@@ -869,8 +903,12 @@ async function calculateDashboardMetrics(query: any = {}) {
       subtext: (numbersError || mainError)
         ? undefined
         : `Уникальные зарегистрированные пользователи из ${calledUniquePhones.size.toLocaleString('ru-RU')} номеров`,
-      diagnostics: {
+      diagnostics: (numbersError || mainError) ? undefined : {
+        ...supportAttributionDiagnostics,
         unknownSourceCount: mainHasUnknownSourceRegistration.size,
+        note: supportAttributionDiagnostics.excludedAmbiguousNoRegDate > 0
+          ? `${supportAttributionDiagnostics.excludedAmbiguousNoRegDate} звонков с неоднозначным статусом не удалось однозначно отнести: нет даты регистрации. Метрика может быть занижена.`
+          : undefined,
       },
       error: (numbersError || mainError) || undefined,
     },
