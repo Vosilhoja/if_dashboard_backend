@@ -566,10 +566,11 @@ async function calculateDashboardMetrics(query: any = {}) {
     }
   }
 
-  // Атрибуция «пришёл через поддержку»: регистрация должна произойти
-  // в день звонка или позже. Регистрация до звонка считается отдельным
-  // случаем «уже был зарегистрирован», а не результатом поддержки.
+  // Для связи звонков с регистрациями сохраняем все регистрации каждого
+  // телефона: даты нужны для строгой метрики повторных звонков.
   const mainRegistrationsByPhone = new Map();
+  const mainPhones = new Set();
+  const botRegistrationPhones = new Set();
   if (!mainError) {
     for (const row of mainRows) {
       const dateStr = getMainRegistrationDate(row);
@@ -577,7 +578,12 @@ async function calculateDashboardMetrics(query: any = {}) {
       const phone = normalizePhoneWithDiagnostics(
         getPhone(row)
       ).normalized;
-      if (!phone || !registrationDate) continue;
+      if (!phone) continue;
+      mainPhones.add(phone);
+      if (isBotRegistrationSource(getMainRegistrationSource(row))) {
+        botRegistrationPhones.add(phone);
+      }
+      if (!registrationDate) continue;
 
       const registrations = mainRegistrationsByPhone.get(phone) || [];
       registrations.push({
@@ -672,29 +678,22 @@ async function calculateDashboardMetrics(query: any = {}) {
 
   // Метрика 4: Зарегистрировано после контакта с поддержкой
   const matchedPhonesSupport = new Set();
-  const periodEnd = parseSheetDate(endDate);
+  const calledUniquePhones = new Set(
+    numbersInPeriod
+      .map((row) => normalizePhoneWithDiagnostics(getPhone(row)).normalized)
+      .filter(Boolean)
+  );
   if (!numbersError && !mainError) {
     for (const row of numbersInPeriod) {
       const pDiag = normalizePhoneWithDiagnostics(getPhone(row));
       const p = pDiag.normalized;
       const comment = getCallStatus(row);
-      const callDate = parseSheetDate(
-        getCallDate(row)
-      );
-      const registrations = p ? mainRegistrationsByPhone.get(p) || [] : [];
-      const registration = registrations
-        .filter((item) =>
-          item.date >= callDate &&
-          (!periodEnd || item.date <= periodEnd) &&
-          !item.fromBot
-        )
-        .sort((a, b) => a.date - b.date)[0];
       if (
         p &&
+        mainPhones.has(p) &&
+        !botRegistrationPhones.has(p) &&
         !isAlreadyRegisteredStatus(comment, STATUS_CONFIG.alreadyRegistered) &&
-        callDate &&
-        registration &&
-        isDateInRange(callDate, startDate, endDate)
+        !isWrongPersonStatus(comment, STATUS_CONFIG.wrongPerson)
       ) {
         matchedPhonesSupport.add(p);
       }
@@ -704,6 +703,7 @@ async function calculateDashboardMetrics(query: any = {}) {
   // Метрика 5: Зарегистрировано после повторной ссылки
   let repeatStatusesFoundInPeriod = 0;
   const matchedRepeatPhones = new Set();
+  const periodEnd = parseSheetDate(endDate);
   if (!numbersError && !mainError) {
     for (const row of numbersInPeriod) {
       const comment = getCallStatus(row);
@@ -712,9 +712,7 @@ async function calculateDashboardMetrics(query: any = {}) {
 
       repeatStatusesFoundInPeriod++;
       const p = normalizePhoneWithDiagnostics(getPhone(row)).normalized;
-      const callDate = parseSheetDate(
-        getCallDate(row)
-      );
+      const callDate = parseSheetDate(getCallDate(row));
       const registrations = p ? mainRegistrationsByPhone.get(p) || [] : [];
       const registration = registrations
         .filter((item) =>
@@ -861,10 +859,10 @@ async function calculateDashboardMetrics(query: any = {}) {
       value: (numbersError || mainError) ? '—' : matchedPhonesSupport.size,
       statusText: (numbersError || mainError || numbersInPeriod.length === 0)
         ? undefined
-        : `Конверсия: ${((matchedPhonesSupport.size / numbersInPeriod.length) * 100).toFixed(1)}%`,
+        : `Конверсия: ${((matchedPhonesSupport.size / (calledUniquePhones.size || 1)) * 100).toFixed(1)}%`,
       subtext: (numbersError || mainError)
         ? undefined
-        : `Уникальные регистрации из ${numbersInPeriod.length.toLocaleString('ru-RU')} звонков`,
+        : `Уникальные зарегистрированные пользователи из ${calledUniquePhones.size.toLocaleString('ru-RU')} номеров`,
       error: (numbersError || mainError) || undefined,
     },
     supportContactsCount: {
