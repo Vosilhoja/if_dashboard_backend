@@ -94,7 +94,8 @@ function getPhone(row) {
 
 function getMainRegistrationDate(row) {
   return getRowValue(row, ['Дата создания', 'Дата регистрации', 'Creation date', 'Registration date', 'Дата', 'Date'], (key) =>
-    /(датасоздания|датарегистрац|creationdate|registrationdate)/.test(key)
+    /(датасоздания|датарегистрац|дата.*заполн|дата.*создан|creationdate|registrationdate|registeredat|createdat)/.test(key)
+      && !/(звон|call|контакт|обращ)/.test(key)
   );
 }
 
@@ -625,16 +626,20 @@ async function calculateDashboardMetrics(query: any = {}) {
   const smsRatioPercent = (smsRatio * 100).toFixed(1);
   const smsIsAlert = eskizCount > 0 && smsRatio < STATUS_CONFIG.thresholds.smsMatchPercentage;
 
-  // Метрика 3: Зарегистрировано в панели (main_base)
+  // Метрика 3: Зарегистрировано в панели (main_base).
+  // The source can contain duplicate rows for one participant.
   let registeredMainVal = 0;
+  const registeredPhonesInPeriod = new Set();
   if (!mainError) {
     for (const row of mainRows) {
       const dateStr = getMainRegistrationDate(row);
       const d = parseSheetDate(dateStr);
       if (isDateInRange(d, startDate, endDate)) {
-        registeredMainVal++;
+        const phone = normalizePhoneWithDiagnostics(getPhone(row)).normalized;
+        if (phone) registeredPhonesInPeriod.add(phone);
       }
     }
+    registeredMainVal = registeredPhonesInPeriod.size;
   }
 
   // Метрика 4: Зарегистрировано после контакта с поддержкой
