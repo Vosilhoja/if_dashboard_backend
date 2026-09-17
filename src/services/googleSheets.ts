@@ -1,5 +1,4 @@
-const { GoogleSpreadsheet } = require('google-spreadsheet');
-const { JWT } = require('google-auth-library');
+const { fetchSheetRaw, rowsToObjects, getSheetMetadata } = require('./sheetsClient');
 const config = require('../config');
 const { parseSheetDate, isDateInRange } = require('../utils/dateUtils');
 const { normalizePhoneWithDiagnostics, normalizePhone } = require('../utils/phoneUtils');
@@ -163,28 +162,6 @@ async function withSheetReadLock(task) {
   return queued;
 }
 
-function getJwtClient() {
-  const email = config.google.clientEmail;
-  let privateKey = config.google.privateKey;
-
-  if (!email || !privateKey) {
-    throw new Error('Отсутствуют GOOGLE_SERVICE_ACCOUNT_EMAIL или GOOGLE_PRIVATE_KEY в конфигурации сервера.');
-  }
-
-  if (privateKey.startsWith('"') && privateKey.endsWith('"')) {
-    privateKey = privateKey.slice(1, -1);
-  }
-  if (privateKey.startsWith("'") && privateKey.endsWith("'")) {
-    privateKey = privateKey.slice(1, -1);
-  }
-  privateKey = privateKey.replace(/\\n/g, '\n');
-
-  return new JWT({
-    email,
-    key: privateKey,
-    scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'],
-  });
-}
 
 function getSheetId(type) {
   let id = '';
@@ -239,46 +216,16 @@ async function fetchAllRowsForSheet(type, forceRefresh = false) {
 
     while (true) {
       try {
-        return await withSheetReadLock(async () => {
-          const auth = getJwtClient();
-          const sheetId = getSheetId(type);
-          const doc = new GoogleSpreadsheet(sheetId, auth);
+        const sheetId = getSheetId(type);
+        const sheetHint = type === 'numbers_repeat' ? 'Повторные' : undefined;
+        const { headers, rows } = await fetchSheetRaw(sheetId, sheetHint);
+        const data = rowsToObjects(headers, rows);
 
-          await doc.loadInfo();
-          let sheet = doc.sheetsByIndex[0];
-          if (type === 'numbers_repeat') {
-            sheet = doc.sheetsByTitle['Повторные'] || doc.sheetsByTitle['повторные'] || doc.sheetsByIndex[1] || sheet;
-          }
-          if (!sheet) {
-            throw new Error(`Лист не найден в документе Google Таблицы для "${type}"`);
-          }
-
-          await sheet.loadHeaderRow();
-          let rawRows = await sheet.getRows();
-
-          const data = rawRows.map((row) => {
-            const obj: Record<string, string> = {};
-            for (const h of sheet.headerValues || []) {
-              obj[h] = row.get(h) ?? '';
-            }
-            // Explicitly preserve column D (index 3) from raw sheet row
-            const rawColD = row._rawData?.[3] ?? row.get(sheet.headerValues?.[3]);
-            if (rawColD !== undefined && rawColD !== null) {
-              obj._columnD = String(rawColD).trim();
-            }
-            return obj;
-          });
-          // Release google-spreadsheet row wrappers before storing the
-          // normalized snapshot. This materially lowers the peak heap during
-          // large-sheet refreshes.
-          rawRows = null;
-
-          console.log(`[GoogleSheets API] Успешно загружено ${data.length} строк для "${type}"`);
-          const oldData = cache[cacheKey]?.data;
-          cache[cacheKey] = { data, timestamp: Date.now() };
-          if (oldData) oldData.length = 0;
-          return data;
-        });
+        console.log(`[GoogleSheets API] Успешно загружено ${data.length} строк для "${type}"`);
+        const oldData = cache[cacheKey]?.data;
+        cache[cacheKey] = { data, timestamp: Date.now() };
+        if (oldData) oldData.length = 0;
+        return data;
       } catch (err) {
         if (!isQuotaExceededError(err) || attempt >= SHEET_REQUEST_RETRY_LIMIT) {
           console.error(`[GoogleSheets API Error] Ошибка загрузки таблицы "${type}":`, {
@@ -312,25 +259,11 @@ async function fetchNewRowsForSheet(type) {
     return { rows: [], isInitial: true };
   }
 
-  const auth = getJwtClient();
   const sheetId = getSheetId(type);
-  const doc = new GoogleSpreadsheet(sheetId, auth);
-  await doc.loadInfo();
-  let sheet = doc.sheetsByIndex[0];
-  if (type === 'numbers_repeat') {
-    sheet = doc.sheetsByTitle['Повторные'] || doc.sheetsByTitle['повторные'] || doc.sheetsByIndex[1] || sheet;
-  }
-  await sheet.loadHeaderRow();
-  const newRawRows = await sheet.getRows({ offset: existing.length });
-  const rows = newRawRows.map((row) => {
-    const item: Record<string, string> = {};
-    for (const header of sheet.headerValues || []) item[header] = row.get(header) ?? '';
-    const rawColD = row._rawData?.[3] ?? row.get(sheet.headerValues?.[3]);
-    if (rawColD !== undefined && rawColD !== null) {
-      item._columnD = String(rawColD).trim();
-    }
-    return item;
-  });
+  const sheetHint = type === 'numbers_repeat' ? 'Повторные' : undefined;
+  const { headers, rows: allRawRows } = await fetchSheetRaw(sheetId, sheetHint);
+  const newRawRows = allRawRows.slice(existing.length);
+  const rows = rowsToObjects(headers, newRawRows);
 
   if (rows.length > 0) {
     cache[cacheKey] = { data: existing.concat(rows), timestamp: Date.now() };
@@ -389,23 +322,15 @@ async function getSheetSummary(type, refresh = false) {
     };
   }
 
-  const auth = getJwtClient();
   const sheetId = getSheetId(type);
-  const doc = new GoogleSpreadsheet(sheetId, auth);
-
-  await withSheetReadLock(async () => {
-    await doc.loadInfo();
+  const sheetHint = type === 'numbers_repeat' ? 'Повторные' : undefined;
+  const { rowCount } = await withSheetReadLock(async () => {
+    return await getSheetMetadata(sheetId, sheetHint);
   });
-
-  let sheet = doc.sheetsByIndex[0];
-  if (type === 'numbers_repeat') {
-    sheet = doc.sheetsByTitle['Повторные'] || doc.sheetsByTitle['повторные'] || doc.sheetsByIndex[1] || sheet;
-  }
-  if (!sheet) throw new Error(`Лист не найден в документе Google Таблицы для "${type}"`);
 
   return {
     type,
-    total: getEffectiveSheetRowCount(sheet.rowCount),
+    total: getEffectiveSheetRowCount(rowCount),
     cachedAt: cache[cacheKey]?.timestamp
       ? new Date(cache[cacheKey].timestamp).toISOString()
       : null,
@@ -414,31 +339,17 @@ async function getSheetSummary(type, refresh = false) {
 }
 
 async function fetchSheetPage(type, page, pageSize) {
-  const auth = getJwtClient();
   const sheetId = getSheetId(type);
-  const doc = new GoogleSpreadsheet(sheetId, auth);
-  await doc.loadInfo();
-  let sheet = doc.sheetsByIndex[0];
-  if (type === 'numbers_repeat') {
-    sheet = doc.sheetsByTitle['Повторные'] || doc.sheetsByTitle['повторные'] || doc.sheetsByIndex[1] || sheet;
-  }
-  if (!sheet) throw new Error(`Лист не найден в документе Google Таблицы для "${type}"`);
-
-  await sheet.loadHeaderRow();
-  const rawRows = await sheet.getRows({
-    offset: (page - 1) * pageSize,
-    limit: pageSize,
-  });
-  const rows = rawRows.map((row) => {
-    const item = {};
-    for (const header of sheet.headerValues || []) item[header] = row.get(header) ?? '';
-    return item;
-  });
+  const sheetHint = type === 'numbers_repeat' ? 'Повторные' : undefined;
+  const { headers, rows: allRawRows, rowCount } = await fetchSheetRaw(sheetId, sheetHint);
+  const offset = (page - 1) * pageSize;
+  const pageRawRows = allRawRows.slice(offset, offset + pageSize);
+  const rows = rowsToObjects(headers, pageRawRows);
 
   return {
-    headers: sheet.headerValues || [],
+    headers,
     rows,
-    total: getEffectiveSheetRowCount(sheet.rowCount, rows.length),
+    total: getEffectiveSheetRowCount(rowCount, allRawRows.length),
   };
 }
 
@@ -674,25 +585,13 @@ async function calculateDashboardMetrics(query: any = {}) {
     }
   };
 
-  if (refresh) {
-    for (const [type, assignRows, assignError] of [
-      ['main', (rows) => { mainRows = rows; }, (error) => { mainError = error; }],
-      ['numbers', (rows) => { numbersRows = rows; }, (error) => { numbersError = error; }],
-      ['eskiz', (rows) => { eskizRows = rows; }, (error) => { eskizError = error; }],
-      ['not_completed', (rows) => { notCompletedRows = rows; }, (error) => { notCompletedError = error; }],
-      ['survey_attempts', (rows) => { surveyAttemptRows = rows; }, (error) => { surveyAttemptsError = error; }],
-    ]) {
-      await loadSheet(type, assignRows, assignError);
-    }
-  } else {
-    await Promise.all([
-      loadSheet('main', (rows) => { mainRows = rows; }, (error) => { mainError = error; }),
-      loadSheet('numbers', (rows) => { numbersRows = rows; }, (error) => { numbersError = error; }),
-      loadSheet('eskiz', (rows) => { eskizRows = rows; }, (error) => { eskizError = error; }),
-      loadSheet('not_completed', (rows) => { notCompletedRows = rows; }, (error) => { notCompletedError = error; }),
-      loadSheet('survey_attempts', (rows) => { surveyAttemptRows = rows; }, (error) => { surveyAttemptsError = error; }),
-    ]);
-  }
+  await Promise.all([
+    loadSheet('main', (rows) => { mainRows = rows; }, (error) => { mainError = error; }),
+    loadSheet('numbers', (rows) => { numbersRows = rows; }, (error) => { numbersError = error; }),
+    loadSheet('eskiz', (rows) => { eskizRows = rows; }, (error) => { eskizError = error; }),
+    loadSheet('not_completed', (rows) => { notCompletedRows = rows; }, (error) => { notCompletedError = error; }),
+    loadSheet('survey_attempts', (rows) => { surveyAttemptRows = rows; }, (error) => { surveyAttemptsError = error; }),
+  ]);
 
   const surveyAttemptDetails = surveyAttemptsError
     ? null
