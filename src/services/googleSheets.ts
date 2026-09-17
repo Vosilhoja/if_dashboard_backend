@@ -14,7 +14,11 @@ const {
 // Keep complete snapshots long enough to avoid repeatedly materializing all
 // Google Sheets rows on a small production instance.
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const BACKGROUND_REFRESH_MS = 5 * 60 * 1000;
+const configuredRefreshInterval = parseInt(process.env.DATA_REFRESH_INTERVAL_MS || '', 10);
+const BACKGROUND_REFRESH_MS =
+  Number.isFinite(configuredRefreshInterval) && configuredRefreshInterval >= 0
+    ? configuredRefreshInterval
+    : 10 * 60 * 1000;
 const SHEET_REQUEST_RETRY_LIMIT = 4;
 const SHEET_REQUEST_BACKOFF_BASE_MS = 1000;
 const cache = {};
@@ -453,8 +457,31 @@ async function prewarmDataCache() {
 }
 
 function startBackgroundDataRefresh() {
-  console.log('[Data refresh] Фоновая синхронизация отключена: используйте POST /api/data/sync.');
-  return null;
+  if (BACKGROUND_REFRESH_MS <= 0) {
+    console.log('[Data refresh] Автоматическая синхронизация отключена настройкой DATA_REFRESH_INTERVAL_MS.');
+    return null;
+  }
+
+  const refresh = async () => {
+    if (backgroundRefreshInProgress || syncInFlight) return;
+    backgroundRefreshInProgress = true;
+    try {
+      const result = await synchronizeSheets();
+      const added = result.results.reduce((total, item) => total + (item.added || 0), 0);
+      console.log(`[Data refresh] Синхронизация завершена: добавлено ${added} новых строк.`);
+    } catch (error) {
+      console.error('[Data refresh] Ошибка автоматической синхронизации:', error);
+    } finally {
+      backgroundRefreshInProgress = false;
+    }
+  };
+
+  const timer = setInterval(() => {
+    void refresh();
+  }, BACKGROUND_REFRESH_MS);
+  timer.unref?.();
+  console.log(`[Data refresh] Автоматическая синхронизация включена: каждые ${Math.round(BACKGROUND_REFRESH_MS / 60000)} мин.`);
+  return timer;
 }
 
 const SURVEY_REGION_NAMES = {
