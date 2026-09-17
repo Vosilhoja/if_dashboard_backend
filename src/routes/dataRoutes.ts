@@ -177,7 +177,9 @@ router.get('/sheets/:type', authenticateToken, dashboardLimiter, dashboardRefres
       return res.status(200).json(summary);
     }
     const page = Math.max(1, parseInt(req.query.page || '1', 10));
-    const pageSize = Math.min(500, Math.max(10, parseInt(req.query.pageSize || '25', 10)));
+    const isExport = req.query.export === 'true';
+    const requestedPageSize = Math.max(10, parseInt(req.query.pageSize || '25', 10));
+    const pageSize = Math.min(isExport ? 100000 : 500, requestedPageSize);
     const search = (req.query.search || '').trim();
     const refresh = req.query.refresh === 'true' || req.query.fresh === 'true';
     const sortBy = String(req.query.sortBy || '');

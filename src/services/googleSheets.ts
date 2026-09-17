@@ -1222,7 +1222,7 @@ async function getSheetPaginated(
 ) {
   const cacheKey = `sheet_${type}`;
   const allRows = cache[cacheKey]?.data || [];
-  if (type === 'not_completed') {
+  if (type === 'not_completed' || type === 'main') {
     const numbersRows = cache['sheet_numbers']?.data || [];
     const numbers = new Set(numbersRows.map((row) => normalizePhone(getPhone(row))).filter(Boolean));
     for (const row of allRows) {
@@ -1236,7 +1236,7 @@ async function getSheetPaginated(
   } else if (allRows.length > 0) {
     headers = Object.keys(allRows[0]);
   }
-  if (type === 'not_completed' && !headers.includes('ОТ поддержки?')) {
+  if ((type === 'not_completed' || type === 'main') && !headers.includes('ОТ поддержки?')) {
     headers = [...headers, 'ОТ поддержки?'];
   }
 
