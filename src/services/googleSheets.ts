@@ -257,7 +257,7 @@ async function fetchAllRowsForSheet(type, forceRefresh = false) {
           let rawRows = await sheet.getRows();
 
           const data = rawRows.map((row) => {
-            const obj = {};
+            const obj: Record<string, string> = {};
             for (const h of sheet.headerValues || []) {
               obj[h] = row.get(h) ?? '';
             }
@@ -323,7 +323,7 @@ async function fetchNewRowsForSheet(type) {
   await sheet.loadHeaderRow();
   const newRawRows = await sheet.getRows({ offset: existing.length });
   const rows = newRawRows.map((row) => {
-    const item = {};
+    const item: Record<string, string> = {};
     for (const header of sheet.headerValues || []) item[header] = row.get(header) ?? '';
     const rawColD = row._rawData?.[3] ?? row.get(sheet.headerValues?.[3]);
     if (rawColD !== undefined && rawColD !== null) {
