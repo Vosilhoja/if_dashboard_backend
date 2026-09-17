@@ -198,7 +198,11 @@ async function fetchAllRowsForSheet(type, forceRefresh = false) {
   const now = Date.now();
 
   if (!forceRefresh && !cache[cacheKey]) {
-    throw new Error(`Данные таблицы "${type}" ещё не синхронизированы`);
+    const error = Object.assign(
+      new Error(`Данные таблицы "${type}" ещё синхронизируются`),
+      { status: 503 },
+    );
+    throw error;
   }
 
   if (!forceRefresh && cache[cacheKey]) {
@@ -598,7 +602,10 @@ async function calculateDashboardMetrics(query: any = {}) {
 
   const cacheKey = getDashboardMetricsCacheKey(query);
   const cachedMetrics = dashboardMetricsCache.get(cacheKey);
-  if (!refresh && cachedMetrics && Date.now() - cachedMetrics.timestamp < DASHBOARD_METRICS_CACHE_TTL_MS) {
+  // `refresh` is kept for API compatibility, but Google Sheets synchronization
+  // is now explicit via POST /api/data/sync. Never discard a valid snapshot
+  // cache just because a page requested fresh data.
+  if (cachedMetrics && Date.now() - cachedMetrics.timestamp < DASHBOARD_METRICS_CACHE_TTL_MS) {
     return cachedMetrics.data;
   }
   if (dashboardMetricsInFlight.has(cacheKey)) {

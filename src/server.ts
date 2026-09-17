@@ -154,9 +154,6 @@ async function startServer() {
     // Наполнение пользователями по умолчанию
     await seedDefaultUsers();
 
-    // Warm the Google Sheets cache before accepting traffic so the first
-    // dashboard render uses ready data instead of waiting on four API calls.
-    await synchronizeSheets();
     startBackgroundDataRefresh();
     // Google Sheets worker is optional at boot: API and health endpoint must
     // remain available while Railway variables are being configured.
@@ -164,7 +161,8 @@ async function startServer() {
     startStatusClassifierWorker();
     startStatusSuggestionScheduler();
 
-    // Запуск сервера
+    // Open the port before the initial Google Sheets sync. Health checks and
+    // cached requests must not wait 30-50 seconds for an external API.
     app.listen(config.port, '0.0.0.0', () => {
       console.log('====================================================');
       console.log(`🚀 [HURMO Backend] Сервер успешно запущен на порту: ${config.port}`);
@@ -175,6 +173,12 @@ async function startServer() {
 
       // Запуск Telegram Бота
       initTelegramBot();
+    });
+
+    // Initial sync runs after the server is available. Subsequent reads use
+    // the in-memory snapshot and never contact Google Sheets.
+    void synchronizeSheets().catch((error) => {
+      console.error('❌ [Bootstrap] Начальная синхронизация не выполнена:', error);
     });
   } catch (error) {
     console.error('❌ Фатальная ошибка при запуске сервера:', error);

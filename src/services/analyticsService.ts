@@ -1,6 +1,8 @@
 const { subDays } = require('date-fns');
 const { fetchAllRowsForSheet, withDashboardMetricsSlot } = require('./googleSheets');
 const { formatDateToISO } = require('../utils/dateUtils');
+const analyticsCache = new Map();
+const ANALYTICS_CACHE_TTL_MS = 60 * 1000;
 
 function binAge(age) {
   if (age === null || age === undefined || isNaN(age)) return null;
@@ -128,6 +130,11 @@ function aggregateTopCrossCombinations(rows) {
 
 async function calculateAnalyticsData(query: any = {}) {
   const { startDate = '', endDate = '', refresh = false } = query;
+  const cacheKey = JSON.stringify({ startDate, endDate });
+  const cached = analyticsCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < ANALYTICS_CACHE_TTL_MS) {
+    return cached.data;
+  }
 
   // Analytics reads the backend snapshot. Google Sheets is accessed only by
   // the explicit synchronization endpoint.
@@ -218,7 +225,7 @@ async function calculateAnalyticsData(query: any = {}) {
   const monthlyDynamics = aggregateMonthlyDynamics(rows);
   const topPairs = aggregateTopCrossCombinations(rows);
 
-  return {
+  const result = {
     rows,
     allRowsCount: allRows.length,
     periodRowsCount: rows.length,
@@ -247,6 +254,11 @@ async function calculateAnalyticsData(query: any = {}) {
     },
     cachedAt: new Date().toISOString(),
   };
+  analyticsCache.set(cacheKey, { data: result, timestamp: Date.now() });
+  while (analyticsCache.size > 16) {
+    analyticsCache.delete(analyticsCache.keys().next().value);
+  }
+  return result;
 }
 
 module.exports = {
