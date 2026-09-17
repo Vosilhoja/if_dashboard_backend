@@ -95,13 +95,30 @@ function getEditableStatusCategories() {
 }
 
 async function updateLearnedPhrase(categoryId, phrase, action = 'add') {
-  if (!isPgConnected() || !pool) throw new Error('PostgreSQL не подключен');
   if (!getEditableStatusCategories().some((category) => category.id === categoryId)) {
     throw new Error('Неизвестная категория статуса');
   }
   const normalizedPhrase = String(phrase || '').trim().replace(/\s+/g, ' ');
   if (!normalizedPhrase || normalizedPhrase.length > 120) {
     throw new Error('Вариант статуса должен содержать от 1 до 120 символов');
+  }
+
+  if (!isPgConnected() || !pool) {
+    const list = learnedCache.byCategory.get(categoryId) || [];
+    if (action === 'add') {
+      if (!list.includes(normalizedPhrase)) list.push(normalizedPhrase);
+      learnedCache.byCategory.set(categoryId, list);
+    } else {
+      learnedCache.byCategory.set(categoryId, list.filter((p) => phraseKey(p) !== phraseKey(normalizedPhrase)));
+    }
+    const category = getStatusCategory(categoryId);
+    return {
+      id: category.id,
+      name: category.name,
+      description: category.description,
+      phrases: getStatusPhrases(category),
+      editablePhrases: getStatusPhrases(category),
+    };
   }
 
   {
@@ -154,7 +171,6 @@ async function updateLearnedPhrase(categoryId, phrase, action = 'add') {
 }
 
 async function renameLearnedPhrase(categoryId, oldPhrase, newPhrase) {
-  if (!isPgConnected() || !pool) throw new Error('PostgreSQL не подключен');
   if (!getEditableStatusCategories().some((category) => category.id === categoryId)) {
     throw new Error('Неизвестная категория статуса');
   }
@@ -162,6 +178,21 @@ async function renameLearnedPhrase(categoryId, oldPhrase, newPhrase) {
   const newValue = String(newPhrase || '').trim().replace(/\s+/g, ' ');
   if (!oldValue || !newValue || newValue.length > 120) {
     throw new Error('Вариант статуса должен содержать от 1 до 120 символов');
+  }
+
+  if (!isPgConnected() || !pool) {
+    const list = (learnedCache.byCategory.get(categoryId) || []).map((p) =>
+      phraseKey(p) === phraseKey(oldValue) ? newValue : p
+    );
+    learnedCache.byCategory.set(categoryId, list);
+    const category = getStatusCategory(categoryId);
+    return {
+      id: category.id,
+      name: category.name,
+      description: category.description,
+      phrases: getStatusPhrases(category),
+      editablePhrases: getStatusPhrases(category),
+    };
   }
 
   {

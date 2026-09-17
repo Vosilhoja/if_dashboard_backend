@@ -20,8 +20,9 @@ function getCommentText(row) {
   return text || '';
 }
 
+const inMemorySuggestions = new Map();
+
 async function materializeLiveUnknownSuggestions(forceRefresh = false) {
-  if (!isPgConnected()) return;
   if (liveScanInFlight) {
     await liveScanInFlight;
     if (!forceRefresh) return;
@@ -41,15 +42,34 @@ async function materializeLiveUnknownSuggestions(forceRefresh = false) {
       counts.set(text, (counts.get(text) || 0) + 1);
     }
 
-    for (const [phrase, occurrences] of counts) {
-      await query(
-        `INSERT INTO suggested_phrases (category, phrase, occurrences)
-         VALUES ('unknown', $1, $2)
-         ON CONFLICT (category, phrase) DO UPDATE
-           SET occurrences = GREATEST(suggested_phrases.occurrences, EXCLUDED.occurrences),
-               updated_at = CURRENT_TIMESTAMP`,
-        [phrase, occurrences]
-      );
+    if (isPgConnected()) {
+      for (const [phrase, occurrences] of counts) {
+        await query(
+          `INSERT INTO suggested_phrases (category, phrase, occurrences)
+           VALUES ('unknown', $1, $2)
+           ON CONFLICT (category, phrase) DO UPDATE
+             SET occurrences = GREATEST(suggested_phrases.occurrences, EXCLUDED.occurrences),
+                 updated_at = CURRENT_TIMESTAMP`,
+          [phrase, occurrences]
+        );
+      }
+    } else {
+      let nextId = inMemorySuggestions.size + 1;
+      for (const [phrase, occurrences] of counts) {
+        const existing = [...inMemorySuggestions.values()].find((item) => item.phrase === phrase);
+        if (existing) {
+          existing.occurrences = occurrences;
+        } else {
+          inMemorySuggestions.set(nextId, {
+            id: nextId,
+            phrase,
+            occurrences,
+            status: 'pending',
+            created_at: new Date().toISOString()
+          });
+          nextId += 1;
+        }
+      }
     }
     lastLiveScanAt = Date.now();
   })();
@@ -97,7 +117,14 @@ async function createSuggestions() {
 }
 
 async function approveSuggestion(id) {
-  if (!isPgConnected()) throw new Error('PostgreSQL не подключен');
+  if (!isPgConnected()) {
+    const numId = Number(id);
+    const suggestion = inMemorySuggestions.get(numId);
+    if (!suggestion || suggestion.status !== 'pending') return null;
+    suggestion.status = 'approved';
+    await updateLearnedPhrase(suggestion.category || 'unknown', suggestion.phrase, 'add');
+    return suggestion;
+  }
   const result = await query(
     `SELECT id, category, phrase FROM suggested_phrases
      WHERE id = $1 AND status = 'pending'`,
@@ -116,8 +143,12 @@ async function approveSuggestion(id) {
 }
 
 async function listPendingSuggestions(forceRefresh = false) {
-  if (!isPgConnected()) return [];
   await materializeLiveUnknownSuggestions(forceRefresh);
+  if (!isPgConnected()) {
+    return [...inMemorySuggestions.values()]
+      .filter((item) => item.status === 'pending')
+      .sort((a, b) => b.occurrences - a.occurrences);
+  }
   // A queued classification may finish after the worker's finalization step
   // or after a process restart. Materialize unknown classifications on read
   // so the admin UI cannot miss a valid suggestion.
@@ -132,9 +163,19 @@ async function listPendingSuggestions(forceRefresh = false) {
 }
 
 async function assignSuggestion(id, category) {
-  if (!isPgConnected()) throw new Error('PostgreSQL не подключен');
   const allowed = ['link_sent', 'repeat_sent', 'declined', 'already_registered', 'wrong_person'];
   if (!allowed.includes(category)) throw new Error('Недопустимая категория статуса');
+
+  if (!isPgConnected()) {
+    const numId = Number(id);
+    const suggestion = inMemorySuggestions.get(numId);
+    if (!suggestion || suggestion.status !== 'pending') return null;
+    await updateLearnedPhrase(category, suggestion.phrase, 'add');
+    suggestion.category = category;
+    suggestion.status = 'approved';
+    return suggestion;
+  }
+
   const result = await query(
     `SELECT id, phrase, occurrences
      FROM suggested_phrases

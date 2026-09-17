@@ -55,7 +55,16 @@ function getRowValue(row, aliases = [], matcher) {
  * source-of-truth value immediately after a forced synchronization.
  */
 function getColumnDText(row) {
-  const value = Object.values(row || {})[3];
+  if (!row || typeof row !== 'object') return '';
+  // 1. If explicit _columnD or _column3 exists
+  if (row._columnD !== undefined) return String(row._columnD ?? '').trim().replace(/\s+/g, ' ');
+  // 2. Direct named lookup for Column D headers
+  const commentVal = row['Коментарий'] ?? row['Комментарий'] ?? row['comment'] ?? row['Comment'] ?? row['результат звонка'] ?? row['Результат звонка'];
+  if (commentVal !== undefined && String(commentVal).trim()) {
+    return String(commentVal).trim().replace(/\s+/g, ' ');
+  }
+  // 3. Fallback to index 3 in Object.values
+  const value = Object.values(row)[3];
   return String(value ?? '').trim().replace(/\s+/g, ' ');
 }
 
@@ -252,6 +261,11 @@ async function fetchAllRowsForSheet(type, forceRefresh = false) {
             for (const h of sheet.headerValues || []) {
               obj[h] = row.get(h) ?? '';
             }
+            // Explicitly preserve column D (index 3) from raw sheet row
+            const rawColD = row._rawData?.[3] ?? row.get(sheet.headerValues?.[3]);
+            if (rawColD !== undefined && rawColD !== null) {
+              obj._columnD = String(rawColD).trim();
+            }
             return obj;
           });
           // Release google-spreadsheet row wrappers before storing the
@@ -311,6 +325,10 @@ async function fetchNewRowsForSheet(type) {
   const rows = newRawRows.map((row) => {
     const item = {};
     for (const header of sheet.headerValues || []) item[header] = row.get(header) ?? '';
+    const rawColD = row._rawData?.[3] ?? row.get(sheet.headerValues?.[3]);
+    if (rawColD !== undefined && rawColD !== null) {
+      item._columnD = String(rawColD).trim();
+    }
     return item;
   });
 
