@@ -3,7 +3,12 @@ const router = express.Router();
 const { authenticateToken, authorizeRoles } = require('../middleware/auth');
 const { adminStatusLimiter } = require('../middleware/rateLimiter');
 const { enqueueUnmatchedClassification, getClassificationJobStatus } = require('../services/statusClassificationQueue');
-const { approveSuggestion, listPendingSuggestions, assignSuggestion } = require('../services/statusSuggestionService');
+const {
+  approveSuggestion,
+  listPendingSuggestions,
+  assignSuggestion,
+  createDeletedPhraseSuggestion,
+} = require('../services/statusSuggestionService');
 const {
   getEditableStatusCategories,
   updateLearnedPhrase,
@@ -44,6 +49,7 @@ router.delete('/statuses/phrases', authenticateToken, authorizeRoles('super_admi
     const { categoryId, phrase } = req.body || {};
     return res.json({
       category: await updateLearnedPhrase(categoryId, phrase, 'remove'),
+      suggestion: await createDeletedPhraseSuggestion(phrase),
     });
   } catch (error) {
     next(error);

@@ -128,7 +128,7 @@ async function initDatabase() {
         category_id VARCHAR(40) NOT NULL,
         phrase TEXT NOT NULL,
         is_disabled BOOLEAN NOT NULL DEFAULT FALSE,
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
 
       CREATE INDEX IF NOT EXISTS idx_learned_phrases_category

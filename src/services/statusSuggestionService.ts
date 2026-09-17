@@ -22,6 +22,46 @@ function getCommentText(row) {
 
 const inMemorySuggestions = new Map();
 
+async function createDeletedPhraseSuggestion(phrase) {
+  const normalizedPhrase = String(phrase || '').trim().replace(/\s+/g, ' ');
+  if (!normalizedPhrase) return null;
+
+  if (!isPgConnected()) {
+    const existing = [...inMemorySuggestions.values()].find(
+      (item) => item.phrase === normalizedPhrase && item.status === 'pending',
+    );
+    if (existing) {
+      existing.occurrences += 1;
+      return existing;
+    }
+    const nextId = inMemorySuggestions.size > 0
+      ? Math.max(...inMemorySuggestions.keys()) + 1
+      : 1;
+    const suggestion = {
+      id: nextId,
+      phrase: normalizedPhrase,
+      occurrences: 1,
+      status: 'pending',
+      category: 'unknown',
+      created_at: new Date().toISOString(),
+    };
+    inMemorySuggestions.set(nextId, suggestion);
+    return suggestion;
+  }
+
+  const result = await query(
+    `INSERT INTO suggested_phrases (category, phrase, occurrences, status)
+     VALUES ('unknown', $1, 1, 'pending')
+     ON CONFLICT (category, phrase) DO UPDATE
+       SET occurrences = suggested_phrases.occurrences + 1,
+           status = 'pending',
+           updated_at = CURRENT_TIMESTAMP
+     RETURNING id, phrase, occurrences, created_at`,
+    [normalizedPhrase],
+  );
+  return result.rows[0] || null;
+}
+
 async function materializeLiveUnknownSuggestions(forceRefresh = false) {
   if (liveScanInFlight) {
     await liveScanInFlight;
@@ -200,4 +240,10 @@ async function assignSuggestion(id, category) {
   return { ...suggestion, category, status: 'approved' };
 }
 
-module.exports = { createSuggestions, approveSuggestion, listPendingSuggestions, assignSuggestion };
+module.exports = {
+  createSuggestions,
+  approveSuggestion,
+  listPendingSuggestions,
+  assignSuggestion,
+  createDeletedPhraseSuggestion,
+};

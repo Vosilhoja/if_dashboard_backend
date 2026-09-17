@@ -52,20 +52,14 @@ function getStatusPhrases(category) {
         console.error('[StatusMatcher] Не удалось обновить кэш learned-фраз:', error.message || error);
       });
     }
-    const disabled = learnedCache.disabled.get(category.id) || new Set();
-    const phrases = [
-      ...category.phrases.filter((phrase) => !disabled.has(phraseKey(phrase))),
-      ...(learnedCache.byCategory.get(category.id) || []),
-    ];
-    const unique = new Map();
-    for (const phrase of phrases) {
-      const key = phraseKey(phrase);
-      if (key && !unique.has(key)) unique.set(key, phrase);
-    }
-    return [...unique.values()];
   }
+  const disabled = learnedCache.disabled.get(category.id) || new Set();
+  const phrases = [
+    ...category.phrases.filter((phrase) => !disabled.has(phraseKey(phrase))),
+    ...(learnedCache.byCategory.get(category.id) || []),
+  ];
   const unique = new Map();
-  for (const phrase of category.phrases) {
+  for (const phrase of phrases) {
     const key = phraseKey(phrase);
     if (key && !unique.has(key)) unique.set(key, phrase);
   }
@@ -109,7 +103,17 @@ async function updateLearnedPhrase(categoryId, phrase, action = 'add') {
       if (!list.includes(normalizedPhrase)) list.push(normalizedPhrase);
       learnedCache.byCategory.set(categoryId, list);
     } else {
-      learnedCache.byCategory.set(categoryId, list.filter((p) => phraseKey(p) !== phraseKey(normalizedPhrase)));
+      const systemPhrase = getStatusCategory(categoryId).phrases.find(
+        (item) => phraseKey(item) === phraseKey(normalizedPhrase),
+      );
+      if (systemPhrase) {
+        if (!learnedCache.disabled.has(categoryId)) learnedCache.disabled.set(categoryId, new Set());
+        learnedCache.disabled.get(categoryId).add(phraseKey(systemPhrase));
+      }
+      learnedCache.byCategory.set(
+        categoryId,
+        list.filter((p) => phraseKey(p) !== phraseKey(normalizedPhrase)),
+      );
     }
     const category = getStatusCategory(categoryId);
     return {
@@ -181,11 +185,17 @@ async function renameLearnedPhrase(categoryId, oldPhrase, newPhrase) {
   }
 
   if (!isPgConnected() || !pool) {
-    const list = (learnedCache.byCategory.get(categoryId) || []).map((p) =>
-      phraseKey(p) === phraseKey(oldValue) ? newValue : p
-    );
-    learnedCache.byCategory.set(categoryId, list);
     const category = getStatusCategory(categoryId);
+    const systemPhrase = category.phrases.find((item) => phraseKey(item) === phraseKey(oldValue));
+    const list = (learnedCache.byCategory.get(categoryId) || []).filter(
+      (p) => phraseKey(p) !== phraseKey(oldValue),
+    );
+    if (systemPhrase) {
+      if (!learnedCache.disabled.has(categoryId)) learnedCache.disabled.set(categoryId, new Set());
+      learnedCache.disabled.get(categoryId).add(phraseKey(systemPhrase));
+    }
+    if (!list.some((p) => phraseKey(p) === phraseKey(newValue))) list.push(newValue);
+    learnedCache.byCategory.set(categoryId, list);
     return {
       id: category.id,
       name: category.name,
