@@ -1,4 +1,4 @@
-const { fetchSheetRaw, rowsToObjects, getSheetMetadata } = require('./sheetsClient');
+const { fetchSheetRaw, fetchSheetDelta, rowsToObjects, getSheetMetadata } = require('./sheetsClient');
 const config = require('../config');
 const { parseSheetDate, isDateInRange } = require('../utils/dateUtils');
 const { normalizePhoneWithDiagnostics, normalizePhone } = require('../utils/phoneUtils');
@@ -27,6 +27,7 @@ const MAX_DASHBOARD_METRICS_CACHE_ENTRIES = 32;
 const DASHBOARD_METRICS_CACHE_TTL_MS = 60 * 1000;
 let dashboardMetricsActive = 0;
 const dashboardMetricsWaiters = [];
+let syncInFlight = null;
 // A metrics calculation keeps several large sheet snapshots alive while it
 // builds phone/date indexes. Running two calculations concurrently can exceed
 // Railway's memory limit with the production-sized sheets.
@@ -196,6 +197,10 @@ async function fetchAllRowsForSheet(type, forceRefresh = false) {
   const cacheKey = `sheet_${type}`;
   const now = Date.now();
 
+  if (!forceRefresh && !cache[cacheKey]) {
+    throw new Error(`Данные таблицы "${type}" ещё не синхронизированы`);
+  }
+
   if (!forceRefresh && cache[cacheKey]) {
     const age = now - cache[cacheKey].timestamp;
     if (age < CACHE_TTL_MS) {
@@ -223,7 +228,12 @@ async function fetchAllRowsForSheet(type, forceRefresh = false) {
 
         console.log(`[GoogleSheets API] Успешно загружено ${data.length} строк для "${type}"`);
         const oldData = cache[cacheKey]?.data;
-        cache[cacheKey] = { data, timestamp: Date.now() };
+        cache[cacheKey] = {
+          data,
+          headers,
+          sourceRowCount: rows.length + 1,
+          timestamp: Date.now(),
+        };
         if (oldData) oldData.length = 0;
         return data;
       } catch (err) {
@@ -252,8 +262,8 @@ async function fetchAllRowsForSheet(type, forceRefresh = false) {
 
 async function fetchNewRowsForSheet(type) {
   const cacheKey = `sheet_${type}`;
-  const existing = cache[cacheKey]?.data || [];
-  if (!existing.length) {
+  const current = cache[cacheKey];
+  if (!current) {
     // Do not turn a manual status check into a full 64k+ row download after
     // a process restart. A complete refresh is an explicit table action.
     return { rows: [], isInitial: true };
@@ -261,17 +271,64 @@ async function fetchNewRowsForSheet(type) {
 
   const sheetId = getSheetId(type);
   const sheetHint = type === 'numbers_repeat' ? 'Повторные' : undefined;
-  const { headers, rows: allRawRows } = await fetchSheetRaw(sheetId, sheetHint);
-  const newRawRows = allRawRows.slice(existing.length);
-  const rows = rowsToObjects(headers, newRawRows);
+  const delta = await fetchSheetDelta(sheetId, current.sourceRowCount + 1, sheetHint);
+  const rows = rowsToObjects(current.headers || [], delta.rows);
 
   if (rows.length > 0) {
-    cache[cacheKey] = { data: existing.concat(rows), timestamp: Date.now() };
+    cache[cacheKey] = {
+      data: current.data.concat(rows),
+      headers: current.headers,
+      sourceRowCount: Math.max(current.sourceRowCount, delta.rowCount),
+      timestamp: Date.now(),
+    };
   } else {
-    cache[cacheKey].timestamp = Date.now();
+    current.sourceRowCount = Math.max(current.sourceRowCount, delta.rowCount);
+    current.timestamp = Date.now();
   }
   console.log(`[GoogleSheets API] Загружено новых строк для "${type}": ${rows.length}`);
   return { rows, isInitial: false };
+}
+
+async function syncSheet(type) {
+  const cacheKey = `sheet_${type}`;
+  const sheetId = getSheetId(type);
+  const sheetHint = type === 'numbers_repeat' ? 'Повторные' : undefined;
+  const current = cache[cacheKey];
+
+  if (!current) {
+    const { headers, rows } = await fetchSheetRaw(sheetId, sheetHint);
+    const data = rowsToObjects(headers, rows);
+    cache[cacheKey] = { data, headers, sourceRowCount: rows.length + 1, timestamp: Date.now() };
+    return { type, added: data.length, total: data.length, initialized: true };
+  }
+
+  const startRow = current.sourceRowCount + 1;
+  const delta = await fetchSheetDelta(sheetId, startRow, sheetHint);
+  const addedRows = rowsToObjects(current.headers || [], delta.rows);
+  if (addedRows.length > 0) current.data.push(...addedRows);
+  current.sourceRowCount = Math.max(current.sourceRowCount, delta.rowCount);
+  current.timestamp = Date.now();
+  return { type, added: addedRows.length, total: current.data.length, initialized: false };
+}
+
+async function synchronizeSheets() {
+  if (syncInFlight) return syncInFlight;
+  syncInFlight = Promise.all(
+    ['main', 'numbers', 'eskiz', 'not_completed', 'survey_attempts'].map(async (type) => {
+      try {
+        return await syncSheet(type);
+      } catch (error) {
+        console.error(`[Sheets sync] Ошибка синхронизации ${type}:`, error.message || error);
+        return { type, added: 0, error: error.message || `Ошибка синхронизации ${type}` };
+      }
+    }),
+  ).then((results) => {
+    dashboardMetricsCache.clear();
+    return { synchronizedAt: new Date().toISOString(), results };
+  }).finally(() => {
+    syncInFlight = null;
+  });
+  return syncInFlight;
 }
 
 function getEffectiveSheetRowCount(rawCount, loadedRowsLength = 0) {
@@ -295,21 +352,6 @@ function getEffectiveSheetRowCount(rawCount, loadedRowsLength = 0) {
 async function getSheetSummary(type, refresh = false) {
   const cacheKey = `sheet_${type}`;
 
-  // The settings page uses `fresh=true` for an explicit "load fully" check.
-  // Refresh the same snapshot used by dashboard metrics instead of relying
-  // on Google Sheets' grid rowCount, which can include empty/stale rows.
-  if (refresh) {
-    const data = await fetchAllRowsForSheet(type, true);
-    return {
-      type,
-      total: data.length,
-      cachedAt: cache[cacheKey]?.timestamp
-        ? new Date(cache[cacheKey].timestamp).toISOString()
-        : null,
-      refreshing: false,
-    };
-  }
-
   const cachedData = cache[cacheKey]?.data;
   if (cachedData) {
     return {
@@ -322,15 +364,9 @@ async function getSheetSummary(type, refresh = false) {
     };
   }
 
-  const sheetId = getSheetId(type);
-  const sheetHint = type === 'numbers_repeat' ? 'Повторные' : undefined;
-  const { rowCount } = await withSheetReadLock(async () => {
-    return await getSheetMetadata(sheetId, sheetHint);
-  });
-
   return {
     type,
-    total: getEffectiveSheetRowCount(rowCount),
+    total: cachedData ? cachedData.length : 0,
     cachedAt: cache[cacheKey]?.timestamp
       ? new Date(cache[cacheKey].timestamp).toISOString()
       : null,
@@ -339,23 +375,22 @@ async function getSheetSummary(type, refresh = false) {
 }
 
 async function fetchSheetPage(type, page, pageSize) {
-  const sheetId = getSheetId(type);
-  const sheetHint = type === 'numbers_repeat' ? 'Повторные' : undefined;
-  const { headers, rows: allRawRows, rowCount } = await fetchSheetRaw(sheetId, sheetHint);
+  const snapshot = cache[`sheet_${type}`];
+  const headers = snapshot?.headers || [];
+  const allRawRows = snapshot?.data || [];
   const offset = (page - 1) * pageSize;
-  const pageRawRows = allRawRows.slice(offset, offset + pageSize);
-  const rows = rowsToObjects(headers, pageRawRows);
+  const rows = allRawRows.slice(offset, offset + pageSize);
 
   return {
     headers,
     rows,
-    total: getEffectiveSheetRowCount(rowCount, allRawRows.length),
+    total: allRawRows.length,
   };
 }
 
 async function refreshSheet(type) {
   try {
-    await fetchAllRowsForSheet(type, true);
+    await syncSheet(type);
   } catch (error) {
     console.error(`[Data refresh error] ${type}:`, error.message || error);
   }
@@ -394,11 +429,18 @@ async function withDashboardMetricsSlot(task) {
 }
 
 async function prewarmDataCache() {
-  console.log('[Data prewarm] Отключен: данные загружаются только при первом запросе или ручной синхронизации.');
+  console.log('[Data prewarm] Запуск начальной синхронизации таблиц...');
+  const t0 = Date.now();
+  try {
+    await synchronizeSheets();
+    console.log(`[Data prewarm] Все таблицы загружены в память за ${((Date.now() - t0) / 1000).toFixed(1)} сек.`);
+  } catch (err: any) {
+    console.error('[Data prewarm] Ошибка прогрева:', err.message || err);
+  }
 }
 
 function startBackgroundDataRefresh() {
-  console.log('[Data refresh] Фоновое обновление отключено; используйте ручной refresh=true.');
+  console.log('[Data refresh] Фоновая синхронизация отключена: используйте POST /api/data/sync.');
   return null;
 }
 
@@ -578,7 +620,7 @@ async function calculateDashboardMetrics(query: any = {}) {
 
   const loadSheet = async (type, assignRows, assignError) => {
     try {
-      assignRows(await fetchAllRowsForSheet(type, refresh));
+      assignRows(await fetchAllRowsForSheet(type, false));
     } catch (err) {
       console.error(`Ошибка загрузки ${type === 'main' ? 'main_base' : type}:`, err.message);
       assignError(err.message || `Ошибка загрузки ${type}`);
@@ -1083,24 +1125,12 @@ async function getPeriodDetails(startDate = '', endDate = '') {
  */
 async function getSheetPaginated(type, page = 1, pageSize = 25, search = '', forceRefresh = false) {
   const cacheKey = `sheet_${type}`;
-  if (!forceRefresh && !search && !cache[cacheKey]) {
-    const pageData = await fetchSheetPage(type, page, pageSize);
-    return {
-      type,
-      page,
-      pageSize,
-      total: pageData.total,
-      totalPages: Math.ceil(pageData.total / pageSize),
-      headers: pageData.headers,
-      rows: pageData.rows,
-      cachedAt: null,
-      refreshing: true,
-    };
-  }
-
-  const allRows = await fetchAllRowsForSheet(type, forceRefresh);
+  const pageData = await fetchSheetPage(type, page, pageSize);
+  const allRows = cache[cacheKey]?.data || [];
   let headers = [];
-  if (allRows.length > 0) {
+  if (pageData.headers.length > 0) {
+    headers = pageData.headers;
+  } else if (allRows.length > 0) {
     headers = Object.keys(allRows[0]);
   }
 
@@ -1147,6 +1177,7 @@ async function getSheetPaginated(type, page = 1, pageSize = 25, search = '', for
 module.exports = {
   fetchAllRowsForSheet,
   fetchNewRowsForSheet,
+  synchronizeSheets,
   getColumnDText,
   clearSheetCache,
   withDashboardMetricsSlot,

@@ -9,6 +9,15 @@ const {
   getSheetPaginated
 } = require('../services/googleSheets');
 const { getAnalyticsData } = require('../services/analyticsService');
+const { synchronizeSheets } = require('../services/googleSheets');
+
+router.post('/sync', authenticateToken, dashboardRefreshLimiter, async (req, res, next) => {
+  try {
+    return res.status(200).json(await synchronizeSheets());
+  } catch (error) {
+    next(error);
+  }
+});
 
 /**
  * GET /api/data

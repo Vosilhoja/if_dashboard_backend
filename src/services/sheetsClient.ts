@@ -71,6 +71,28 @@ export async function fetchSheetRaw(
   return { headers, rows, rowCount };
 }
 
+export async function fetchSheetDelta(
+  spreadsheetId: string,
+  startRow: number,
+  sheetTitleHint?: string,
+): Promise<{ rows: string[][]; rowCount: number }> {
+  const api = getSheetsApi();
+  const metadata = await getSheetMetadata(spreadsheetId, sheetTitleHint);
+  if (metadata.rowCount < startRow) return { rows: [], rowCount: metadata.rowCount };
+
+  const res = await api.spreadsheets.values.get({
+    spreadsheetId,
+    range: `'${metadata.title.replace(/'/g, "''")}'!A${startRow}:ZZZ`,
+    valueRenderOption: 'UNFORMATTED_VALUE',
+    dateTimeRenderOption: 'FORMATTED_STRING',
+  });
+  const values = (res.data.values || []) as (string | number | boolean | null)[][];
+  return {
+    rows: values.map((row) => row.map((cell) => String(cell ?? ''))),
+    rowCount: metadata.rowCount,
+  };
+}
+
 export async function getSheetMetadata(
   spreadsheetId: string,
   sheetTitleHint?: string
@@ -128,4 +150,27 @@ export function rowsToObjects(headers: string[], rows: string[][]): Record<strin
     }
     return obj;
   });
+}
+
+/**
+ * Читает только новые строки начиная с offset (1-based row number: offset + 2 с учётом заголовка)
+ */
+export async function fetchNewRowsOnly(
+  spreadsheetId: string,
+  startRowIndex: number,
+  sheetTitleHint?: string
+): Promise<{ rows: string[][] }> {
+  const api = getSheetsApi();
+  const { title } = await getSheetMetadata(spreadsheetId, sheetTitleHint);
+  const startRow = startRowIndex + 2; // header is row 1
+  const res = await api.spreadsheets.values.get({
+    spreadsheetId,
+    range: `'${title.replace(/'/g, "''")}'!A${startRow}:ZZ`,
+    valueRenderOption: 'UNFORMATTED_VALUE',
+    dateTimeRenderOption: 'FORMATTED_STRING',
+  });
+
+  const values = (res.data.values || []) as (string | number | boolean | null)[][];
+  const rows = values.map((r) => r.map((c) => (c !== undefined && c !== null ? String(c) : '')));
+  return { rows };
 }

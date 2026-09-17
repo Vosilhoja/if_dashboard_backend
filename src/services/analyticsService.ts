@@ -129,7 +129,9 @@ function aggregateTopCrossCombinations(rows) {
 async function calculateAnalyticsData(query: any = {}) {
   const { startDate = '', endDate = '', refresh = false } = query;
 
-  const mainRows = await fetchAllRowsForSheet('main', refresh);
+  // Analytics reads the backend snapshot. Google Sheets is accessed only by
+  // the explicit synchronization endpoint.
+  const mainRows = await fetchAllRowsForSheet('main', false);
 
   const allRows = new Array(mainRows.length);
   let emptyPhone = 0;

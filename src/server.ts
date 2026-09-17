@@ -21,7 +21,11 @@ const statusAdminRoutes = require('./routes/statusAdminRoutes');
 
 // Инициализация Telegram Бота
 const { initTelegramBot } = require('./bot/telegramBot');
-const { prewarmDataCache, startBackgroundDataRefresh } = require('./services/googleSheets');
+const {
+  prewarmDataCache,
+  startBackgroundDataRefresh,
+  synchronizeSheets,
+} = require('./services/googleSheets');
 const { startCallWorker } = require('./services/worker.service');
 const {
   startStatusClassifierWorker,
@@ -152,7 +156,7 @@ async function startServer() {
 
     // Warm the Google Sheets cache before accepting traffic so the first
     // dashboard render uses ready data instead of waiting on four API calls.
-    await prewarmDataCache();
+    await synchronizeSheets();
     startBackgroundDataRefresh();
     // Google Sheets worker is optional at boot: API and health endpoint must
     // remain available while Railway variables are being configured.

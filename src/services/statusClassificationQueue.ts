@@ -58,7 +58,7 @@ async function enqueueUnmatchedClassification() {
   enqueueInFlight = (async () => {
     // The sync endpoint refreshes this sheet first, but force a read here as
     // well so classification can never use a pre-sync in-process snapshot.
-    const rows = await fetchAllRowsForSheet('numbers', true);
+    const rows = await fetchAllRowsForSheet('numbers', false);
     const categories = Object.values(STATUS_CONFIG).filter(
       (category): category is { id: string; phrases: string[] } =>
         Boolean(category && typeof category === 'object' && 'id' in category && 'phrases' in category)
