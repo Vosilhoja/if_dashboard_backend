@@ -24,7 +24,8 @@ let backgroundRefreshInProgress = false;
 const dashboardMetricsCache = new Map();
 const dashboardMetricsInFlight = new Map();
 const MAX_DASHBOARD_METRICS_CACHE_ENTRIES = 32;
-const DASHBOARD_METRICS_CACHE_TTL_MS = 60 * 1000;
+const DASHBOARD_METRICS_CACHE_TTL_MS =
+  parseInt(process.env.DASHBOARD_METRICS_CACHE_TTL_MS || '', 10) || 4 * 60 * 1000;
 let dashboardMetricsActive = 0;
 const dashboardMetricsWaiters = [];
 let syncInFlight = null;
@@ -433,14 +434,22 @@ async function withDashboardMetricsSlot(task) {
 }
 
 async function prewarmDataCache() {
-  console.log('[Data prewarm] Запуск начальной синхронизации таблиц...');
-  const t0 = Date.now();
-  try {
-    await synchronizeSheets();
-    console.log(`[Data prewarm] Все таблицы загружены в память за ${((Date.now() - t0) / 1000).toFixed(1)} сек.`);
-  } catch (err: any) {
-    console.error('[Data prewarm] Ошибка прогрева:', err.message || err);
+  const timeoutMs = parseInt(process.env.DATA_PREWARM_TIMEOUT_MS || '', 10) || 10_000;
+  console.log(`[Data prewarm] Начальная синхронизация запущена, лимит ожидания ${timeoutMs}мс.`);
+  const syncPromise = synchronizeSheets();
+  const timeoutPromise = new Promise((resolve) => {
+    setTimeout(() => resolve('timeout'), timeoutMs);
+  });
+  const result = await Promise.race([syncPromise, timeoutPromise]);
+  if (result === 'timeout') {
+    console.warn('[Data prewarm] Синхронизация продолжается в фоне.');
+    syncPromise.then(
+      () => console.log('[Data prewarm] Фоновая синхронизация завершена.'),
+      (error) => console.error('[Data prewarm] Ошибка фоновой синхронизации:', error),
+    );
+    return;
   }
+  console.log('[Data prewarm] Кэш успешно прогрет до истечения лимита.');
 }
 
 function startBackgroundDataRefresh() {

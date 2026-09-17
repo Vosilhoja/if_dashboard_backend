@@ -24,7 +24,6 @@ const { initTelegramBot } = require('./bot/telegramBot');
 const {
   prewarmDataCache,
   startBackgroundDataRefresh,
-  synchronizeSheets,
 } = require('./services/googleSheets');
 const { startCallWorker } = require('./services/worker.service');
 const {
@@ -175,9 +174,9 @@ async function startServer() {
       initTelegramBot();
     });
 
-    // Initial sync runs after the server is available. Subsequent reads use
-    // the in-memory snapshot and never contact Google Sheets.
-    void synchronizeSheets().catch((error) => {
+    // Initial sync runs after the server is available and is bounded by the
+    // prewarm timeout. Subsequent reads use the in-memory snapshot.
+    void prewarmDataCache().catch((error) => {
       console.error('❌ [Bootstrap] Начальная синхронизация не выполнена:', error);
     });
   } catch (error) {
