@@ -405,6 +405,49 @@ async function refreshSheet(type) {
   }
 }
 
+async function reloadSheetFully(type) {
+  const cacheKey = `sheet_${type}`;
+  if (inFlight[cacheKey]) return inFlight[cacheKey];
+
+  inFlight[cacheKey] = (async () => {
+    const sheetId = getSheetId(type);
+    const sheetHint = type === 'numbers_repeat' ? 'Повторные' : undefined;
+    const { headers, rows } = await fetchSheetRaw(sheetId, sheetHint);
+    const data = rowsToObjects(headers, rows);
+    cache[cacheKey] = {
+      data,
+      headers,
+      sourceRowCount: rows.length + 1,
+      timestamp: Date.now(),
+    };
+    dashboardMetricsCache.clear();
+    return {
+      type,
+      total: data.length,
+      loadedAt: new Date(cache[cacheKey].timestamp).toISOString(),
+    };
+  })().finally(() => {
+    delete inFlight[cacheKey];
+  });
+
+  return inFlight[cacheKey];
+}
+
+async function checkSheetConnection(type) {
+  const startedAt = Date.now();
+  const sheetId = getSheetId(type);
+  const sheetHint = type === 'numbers_repeat' ? 'Повторные' : undefined;
+  const metadata = await getSheetMetadata(sheetId, sheetHint);
+  return {
+    type,
+    status: 'success',
+    latencyMs: Date.now() - startedAt,
+    title: metadata.title,
+    totalRows: Math.max(0, metadata.rowCount - 1),
+    checkedAt: new Date().toISOString(),
+  };
+}
+
 function clearSheetCache() {
   for (const k of Object.keys(cache)) {
     delete cache[k];
@@ -1166,37 +1209,69 @@ async function getPeriodDetails(startDate = '', endDate = '') {
 /**
  * Пагинация и поиск по сырым таблицам
  */
-async function getSheetPaginated(type, page = 1, pageSize = 25, search = '', forceRefresh = false) {
+async function getSheetPaginated(
+  type,
+  page = 1,
+  pageSize = 25,
+  search = '',
+  forceRefresh = false,
+  sortBy = '',
+  sortDirection = 'asc',
+  filterColumn = '',
+  filterValue = '',
+) {
   const cacheKey = `sheet_${type}`;
-  const pageData = await fetchSheetPage(type, page, pageSize);
   const allRows = cache[cacheKey]?.data || [];
+  if (type === 'not_completed') {
+    const numbersRows = cache['sheet_numbers']?.data || [];
+    const numbers = new Set(numbersRows.map((row) => normalizePhone(getPhone(row))).filter(Boolean));
+    for (const row of allRows) {
+      row['ОТ поддержки?'] = numbers.has(normalizePhone(getPhone(row))) ? 'Да' : 'Нет';
+    }
+  }
+  const pageData = await fetchSheetPage(type, page, pageSize);
   let headers = [];
   if (pageData.headers.length > 0) {
     headers = pageData.headers;
   } else if (allRows.length > 0) {
     headers = Object.keys(allRows[0]);
   }
+  if (type === 'not_completed' && !headers.includes('ОТ поддержки?')) {
+    headers = [...headers, 'ОТ поддержки?'];
+  }
 
   let filteredRows = allRows;
   if (search) {
     const searchNorm = normalizePhone(search);
     const searchLower = search.toLowerCase();
-
     filteredRows = allRows.filter((row) => {
       const phone = getPhone(row);
       if (phone) {
         const normPhone = normalizePhone(phone);
-        if (normPhone.includes(searchNorm) || phone.includes(search)) {
-          return true;
-        }
+        if (normPhone.includes(searchNorm) || phone.includes(search)) return true;
       }
-
-      for (const [, v] of Object.entries(row)) {
-        if (String(v).toLowerCase().includes(searchLower)) {
-          return true;
-        }
-      }
-      return false;
+      return Object.values(row).some((value) =>
+        String(value).toLowerCase().includes(searchLower)
+      );
+    });
+  }
+  if (filterColumn && filterValue) {
+    const filterLower = filterValue.toLowerCase();
+    filteredRows = filteredRows.filter((row) =>
+      String(row[filterColumn] ?? '').toLowerCase().includes(filterLower)
+    );
+  }
+  if (sortBy && headers.includes(sortBy)) {
+    filteredRows = [...filteredRows].sort((a, b) => {
+      const left = String(a[sortBy] ?? '');
+      const right = String(b[sortBy] ?? '');
+      const leftNumber = Number(left.replace(',', '.'));
+      const rightNumber = Number(right.replace(',', '.'));
+      const comparison =
+        left !== '' && right !== '' && Number.isFinite(leftNumber) && Number.isFinite(rightNumber)
+          ? leftNumber - rightNumber
+          : left.localeCompare(right, 'ru', { numeric: true, sensitivity: 'base' });
+      return sortDirection === 'desc' ? -comparison : comparison;
     });
   }
 
@@ -1230,5 +1305,7 @@ module.exports = {
   getPeriodDetails,
   getSheetPaginated,
   getSheetSummary,
+  reloadSheetFully,
+  checkSheetConnection,
   classifyRegistrationSource
 };

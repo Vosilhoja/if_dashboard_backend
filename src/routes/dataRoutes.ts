@@ -19,6 +19,24 @@ router.post('/sync', authenticateToken, dashboardRefreshLimiter, async (req, res
   }
 });
 
+router.post('/sheets/:type/full-reload', authenticateToken, dashboardRefreshLimiter, async (req, res, next) => {
+  try {
+    const { reloadSheetFully } = require('../services/googleSheets');
+    return res.status(200).json(await reloadSheetFully(req.params.type));
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/sheets/:type/connection', authenticateToken, dashboardLimiter, async (req, res, next) => {
+  try {
+    const { checkSheetConnection } = require('../services/googleSheets');
+    return res.status(200).json(await checkSheetConnection(req.params.type));
+  } catch (error) {
+    next(error);
+  }
+});
+
 /**
  * GET /api/data
  * Возвращает реальные посчитанные метрики DashboardMetrics из Google Sheets
@@ -162,8 +180,22 @@ router.get('/sheets/:type', authenticateToken, dashboardLimiter, dashboardRefres
     const pageSize = Math.min(500, Math.max(10, parseInt(req.query.pageSize || '25', 10)));
     const search = (req.query.search || '').trim();
     const refresh = req.query.refresh === 'true' || req.query.fresh === 'true';
+    const sortBy = String(req.query.sortBy || '');
+    const sortDirection = req.query.sortDirection === 'desc' ? 'desc' : 'asc';
+    const filterColumn = String(req.query.filterColumn || '');
+    const filterValue = String(req.query.filterValue || '');
 
-    const data = await getSheetPaginated(type, page, pageSize, search, refresh);
+    const data = await getSheetPaginated(
+      type,
+      page,
+      pageSize,
+      search,
+      refresh,
+      sortBy,
+      sortDirection,
+      filterColumn,
+      filterValue,
+    );
     return res.status(200).json(data);
   } catch (error) {
     next(error);
