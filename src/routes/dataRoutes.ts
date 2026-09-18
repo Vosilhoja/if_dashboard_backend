@@ -12,6 +12,8 @@ const {
   getAutoRefreshSettings,
   setAutoRefreshSettings,
   searchSheetRecords,
+  getCachedSheetRows,
+  getRowChangeHistory,
 } = require('../services/googleSheets');
 const { getAnalyticsData } = require('../services/analyticsService');
 const { synchronizeSheets } = require('../services/googleSheets');
@@ -84,6 +86,38 @@ router.get('/search', authenticateToken, dashboardLimiter, async (req, res, next
   } catch (error) {
     next(error);
   }
+});
+
+router.get('/heatmap', authenticateToken, dashboardLimiter, (req, res) => {
+  const buckets = {};
+  for (const sheet of ['numbers', 'main', 'eskiz']) {
+    for (const row of getCachedSheetRows(sheet)) {
+      const raw = Object.values(row).find((value) => /\d{1,2}[:.]\d{2}/.test(String(value)) || /\d{4}[-/.]\d{1,2}[-/.]\d{1,2}/.test(String(value)));
+      const date = raw ? new Date(String(raw).replace(/\./g, '-')) : null;
+      if (!date || Number.isNaN(date.getTime())) continue;
+      const key = `${date.toISOString().slice(0, 10)} ${String(date.getHours()).padStart(2, '0')}:00`;
+      if (!buckets[key]) buckets[key] = { day: key.slice(0, 10), hour: date.getHours(), calls: 0, registrations: 0, errors: 0 };
+      if (sheet === 'numbers') buckets[key].calls += 1;
+      if (sheet === 'main') buckets[key].registrations += 1;
+      if (sheet === 'eskiz') buckets[key].errors += Object.values(row).some((v) => /error|ошиб|failed|fail/i.test(String(v))) ? 1 : 0;
+    }
+  }
+  res.json({ points: Object.values(buckets as any).sort((a: any, b: any) => `${a.day}${a.hour}`.localeCompare(`${b.day}${b.hour}`)) });
+});
+
+router.get('/history', authenticateToken, dashboardLimiter, (req, res) => {
+  const sheet = String(req.query.sheet || 'numbers');
+  const query = String(req.query.query || '').toLowerCase().trim();
+  const changes = getRowChangeHistory(sheet, query);
+  const rows = getCachedSheetRows(sheet);
+  const matches = query ? rows.filter((row) => Object.values(row).some((value) => String(value ?? '').toLowerCase().includes(query))) : rows;
+  res.json({
+    sheet,
+    query,
+    total: matches.length,
+    rows: matches.slice(-500).map((row, index) => ({ rowNumber: index + 2, ...row })),
+    changes,
+  });
 });
 
 /**

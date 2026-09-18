@@ -18,6 +18,8 @@ const statsRoutes = require('./routes/statsRoutes');
 const callRoutes = require('./routes/callRoutes');
 const statusRoutes = require('./routes/statusRoutes');
 const statusAdminRoutes = require('./routes/statusAdminRoutes');
+const taskRoutes = require('./routes/taskRoutes');
+const systemRoutes = require('./routes/systemRoutes');
 
 // Инициализация Telegram Бота
 const { initTelegramBot } = require('./bot/telegramBot');
@@ -134,6 +136,8 @@ app.use('/api/ai', aiRoutes);
 // Модуль Агрегированной Статистики (Weekly, Monthly, Summary с in-memory кешем)
 app.use('/api/stats', statsRoutes);
 app.use('/api/status', statusRoutes);
+app.use('/api/tasks', taskRoutes);
+app.use('/api/system', systemRoutes);
 
 // 404 & Centralized Error Handlers
 app.use(notFoundHandler);

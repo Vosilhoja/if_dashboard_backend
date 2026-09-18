@@ -13,6 +13,7 @@ const inMemoryStore = {
     { id: 5, name: 'viewer', description: 'Наблюдатель: только чтение сводных отчетов', permissions: ['view_dashboard'] }
   ],
   auditLogs: [],
+  tasks: [],
   aiChatMessages: new Map()
 };
 
@@ -88,6 +89,21 @@ async function initDatabase() {
         details JSONB,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
+
+      CREATE TABLE IF NOT EXISTS tasks (
+        id BIGSERIAL PRIMARY KEY,
+        title VARCHAR(500) NOT NULL,
+        notes TEXT,
+        status VARCHAR(20) NOT NULL DEFAULT 'open' CHECK (status IN ('open','in_progress','done','cancelled')),
+        due_at TIMESTAMP WITH TIME ZONE,
+        linked_phone VARCHAR(50),
+        linked_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_tasks_due_status ON tasks (due_at, status);
+      CREATE INDEX IF NOT EXISTS idx_tasks_linked_user ON tasks (linked_user_id);
 
       CREATE TABLE IF NOT EXISTS ai_chat_messages (
         id BIGSERIAL PRIMARY KEY,

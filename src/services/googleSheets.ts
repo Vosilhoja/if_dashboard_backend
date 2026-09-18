@@ -23,6 +23,7 @@ const BACKGROUND_REFRESH_MS =
 const SHEET_REQUEST_RETRY_LIMIT = 4;
 const SHEET_REQUEST_BACKOFF_BASE_MS = 1000;
 const cache = {};
+const recordChangeHistory = [];
 const inFlight = {};
 const REDIS_CACHE_PREFIX = 'hurmo:sheetcache:';
 const REDIS_CACHE_TTL_SEC = 24 * 60 * 60;
@@ -432,6 +433,35 @@ async function fetchAllRowsForSheet(type, forceRefresh = false) {
 
         console.log(`[GoogleSheets API] Успешно загружено ${data.length} строк для "${type}"`);
         const oldData = cache[cacheKey]?.data;
+        if (oldData) {
+          const keyFields = ['id', 'ID', 'Ид', 'Номер', 'Телефон', 'Номер телефона', 'phone', 'Phone'];
+          const keyOf = (row, index) => {
+            const key = keyFields.map((field) => row?.[field]).find((value) => String(value ?? '').trim());
+            return String(key ?? `row:${index}`);
+          };
+          const before = new Map(oldData.map((row, index) => [keyOf(row, index), row]));
+          data.forEach((row, index) => {
+            const key = keyOf(row, index);
+            const previous = before.get(key);
+            if (!previous) return;
+            const changedFields = Object.keys(row).filter((field) => String(previous[field] ?? '') !== String(row[field] ?? ''));
+            if (changedFields.length) {
+              recordChangeHistory.unshift({
+                id: `${Date.now()}-${type}-${index}`,
+                sheet: type,
+                rowKey: key,
+                changedFields: changedFields.map((field) => ({
+                  field,
+                  before: previous[field] ?? null,
+                  after: row[field] ?? null,
+                })),
+                source: 'google_sync',
+                changedAt: new Date().toISOString(),
+              });
+            }
+          });
+          if (recordChangeHistory.length > 5000) recordChangeHistory.length = 5000;
+        }
         cache[cacheKey] = {
           data,
           headers,
@@ -1577,10 +1607,33 @@ async function searchSheetRecords({ query = '', sheets = [], limit = 100 } = {})
         if (records.length >= safeLimit) {
           return { query: needle, sheets: types, total: records.length, records };
         }
+
       }
     }
   }
   return { query: needle, sheets: types, total: records.length, records };
+}
+
+function getCachedSheetRows(type) {
+  return cache[`sheet_${type}`]?.data || [];
+}
+
+function getSheetsCacheHealth() {
+  const sheets = ['main', 'numbers', 'eskiz'].map((type) => ({
+    type,
+    available: Array.isArray(cache[`sheet_${type}`]?.data),
+    rows: cache[`sheet_${type}`]?.data?.length || 0,
+    cachedAt: cache[`sheet_${type}`]?.timestamp ? new Date(cache[`sheet_${type}`].timestamp).toISOString() : null,
+  }));
+  return { configured: Boolean(config.google.credentials || config.google.serviceAccountJson), sheets };
+}
+
+function getRowChangeHistory(type, query = '') {
+  const needle = String(query).trim().toLowerCase();
+  return recordChangeHistory.filter((item) => {
+    if (type && item.sheet !== type) return false;
+    return !needle || item.rowKey.toLowerCase().includes(needle);
+  }).slice(0, 200);
 }
 
 module.exports = {
@@ -1605,4 +1658,7 @@ module.exports = {
   getAutoRefreshSettings,
   setAutoRefreshSettings,
   searchSheetRecords,
+  getCachedSheetRows,
+  getSheetsCacheHealth,
+  getRowChangeHistory,
 };

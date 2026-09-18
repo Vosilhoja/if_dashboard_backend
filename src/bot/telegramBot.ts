@@ -6,6 +6,7 @@ const {
   consumeTelegramLinkCode,
   isTelegramLinkRateLimited,
 } = require('../services/telegramLink.service');
+const taskService = require('../services/tasks');
 
 /**
  * Форматирует число: 0 → '—'
@@ -193,6 +194,44 @@ function initTelegramBot() {
       `🌐 Полный дашборд: ${config.clientUrl}`,
       { parse_mode: 'Markdown' }
     );
+  });
+
+  async function linkedTelegramUser(ctx) {
+    return UserModel.findByTelegramId(String(ctx.from?.id || ''));
+  }
+  bot.command('tasks', async (ctx) => {
+    const user = await linkedTelegramUser(ctx);
+    if (!user) return ctx.reply('🔒 Сначала привяжите аккаунт через `/link`.', { parse_mode: 'Markdown' });
+    const period = ctx.message.text.includes('today') ? 'today' : undefined;
+    const items = await taskService.listTasks({ userId: user.id, period });
+    return ctx.reply(items.length ? items.map((task) => `#${task.id} [${task.status}] ${task.title}${task.dueAt ? ` — ${new Date(task.dueAt).toLocaleString('ru-RU')}` : ''}`).join('\n') : '✅ Задач нет.');
+  });
+  bot.command('task', async (ctx) => {
+    const user = await linkedTelegramUser(ctx);
+    if (!user) return ctx.reply('🔒 Сначала привяжите аккаунт через `/link`.', { parse_mode: 'Markdown' });
+    const text = ctx.message.text.trim().replace(/^\/task\s*/i, '');
+    const match = text.match(/^(.*?)(?:\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}))?$/);
+    if (!match || !match[1].trim()) return ctx.reply('Формат: `/task <название> [YYYY-MM-DD HH:mm]`', { parse_mode: 'Markdown' });
+    const task = await taskService.createTask({ title: match[1].trim(), dueAt: match[2] ? new Date(match[2].replace(' ', 'T')).toISOString() : null, createdBy: user.id, linkedUserId: user.id });
+    return ctx.reply(`✅ Создана задача #${task.id}: ${task.title}`);
+  });
+  bot.command('done', async (ctx) => {
+    const user = await linkedTelegramUser(ctx);
+    if (!user) return ctx.reply('🔒 Сначала привяжите аккаунт через `/link`.', { parse_mode: 'Markdown' });
+    const id = Number(ctx.message.text.trim().split(/\s+/)[1]);
+    if (!id) return ctx.reply('Формат: `/done <id>`', { parse_mode: 'Markdown' });
+    const task = await taskService.updateTask(id, { status: 'done' });
+    return ctx.reply(task ? `✅ Задача #${id} отмечена выполненной.` : '❌ Задача не найдена.');
+  });
+  // Also accept a compact text form from clients that do not send Telegram
+  // command entities (for example, integrations forwarding plain text).
+  bot.on('text', async (ctx, next) => {
+    const text = String(ctx.message?.text || '').trim();
+    if (!/^task:\s+/i.test(text)) return next();
+    const user = await linkedTelegramUser(ctx);
+    if (!user) return ctx.reply('🔒 Сначала привяжите аккаунт через `/link`.', { parse_mode: 'Markdown' });
+    const task = await taskService.createTask({ title: text.replace(/^task:\s+/i, '').trim(), createdBy: user.id, linkedUserId: user.id });
+    return ctx.reply(`✅ Создана задача #${task.id}: ${task.title}`);
   });
 
   // /find <phone-or-id> [table] — return matching rows without dumping a table.

@@ -1,0 +1,12 @@
+const express = require('express');
+const { authenticateToken } = require('../middleware/auth');
+const tasks = require('../services/tasks');
+const router = express.Router();
+router.use(authenticateToken);
+router.get('/', async (req, res, next) => { try { res.json({ tasks: await tasks.listTasks({ userId: req.user.id, status: req.query.status, period: req.query.period || req.query.range }) }); } catch (e) { next(e); } });
+router.post('/', async (req, res, next) => { try { res.status(201).json(await tasks.createTask({ ...req.body, createdBy: req.user.id, linkedUserId: req.body.linkedUserId || req.user.id })); } catch (e) { next(e); } });
+router.get('/:id', async (req, res, next) => { try { const task = await tasks.getTask(req.params.id); if (!task) return res.status(404).json({ error: 'Task not found' }); res.json(task); } catch (e) { next(e); } });
+router.patch('/:id', async (req, res, next) => { try { const task = await tasks.updateTask(req.params.id, req.body); if (!task) return res.status(404).json({ error: 'Task not found' }); res.json(task); } catch (e) { next(e); } });
+router.put('/:id', async (req, res, next) => { try { const task = await tasks.updateTask(req.params.id, req.body); if (!task) return res.status(404).json({ error: 'Task not found' }); res.json(task); } catch (e) { next(e); } });
+router.delete('/:id', async (req, res, next) => { try { if (!(await tasks.deleteTask(req.params.id))) return res.status(404).json({ error: 'Task not found' }); res.status(204).end(); } catch (e) { next(e); } });
+module.exports = router;
