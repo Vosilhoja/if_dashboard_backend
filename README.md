@@ -44,7 +44,7 @@ GOOGLE_SHEET_MAIN=...
 GOOGLE_SHEET_NUMBERS=...
 GOOGLE_SHEET_ESKIZ=...
 GOOGLE_SHEET_NOT_COMPLETED=...
-GOOGLE_SHEET_SURVEY_ATTEMPTS=1DYofdmtvtWePGei6j-Hgg43MVRPm_QFqey8Ddkce4Yc
+GOOGLE_SHEET_SURVEY_ATTEMPTS=...
 ```
 
 The Google service account must have access to all source spreadsheets.
@@ -65,7 +65,7 @@ Jobs are idempotent when `idempotencyKey` is supplied. Google API failures are r
 
 ## Authentication and roles
 
-- `super_admin` — full access, including users and settings.
+- `super_admin` — full access, including creating users and assigning roles.
 - `admin` — administrative operations allowed by backend policy.
 - `manager` — analytics and reporting.
 - `operator` — call-center operations.
@@ -79,12 +79,26 @@ Important routes:
 | `GET` | `/api/auth/me` | Authenticated |
 | `GET` | `/api/data` | Authenticated |
 | `GET` | `/api/admin/users` | `admin`, `super_admin` |
+| `POST` | `/api/admin/users` | `super_admin` |
+| `PATCH` | `/api/admin/users/:userId/role` | `super_admin` |
 | `POST` | `/api/calls` | Authenticated |
 | `POST` | `/api/ai/chat` | Authenticated |
 | `POST` | `/api/ai/insights` | Authenticated |
 | `GET` | `/health` | Public |
 
 Use `Authorization: Bearer <token>` for backend API calls. The frontend normally sends this through its server-side proxy.
+
+## Local Docker test
+
+The repository contains a standalone `Dockerfile`; no Docker Compose file is
+required. Build and run one backend container with:
+
+```bash
+docker build -t hurmo-backend .
+docker run --rm --env-file .env -p 5000:5000 hurmo-backend
+```
+
+The container health endpoint is available at `http://localhost:5000/health`.
 
 ## AI chat
 

@@ -13,10 +13,10 @@ router.get('/roles', authorizeRoles('super_admin', 'admin'), RoleController.getR
 router.get('/users', authorizeRoles('super_admin', 'admin'), RoleController.getUsers);
 
 // Создание пользователя
-router.post('/users', authorizeRoles('super_admin', 'admin'), RoleController.createUser);
+router.post('/users', authorizeRoles('super_admin'), RoleController.createUser);
 
 // Назначение роли
-router.patch('/users/:userId/role', authorizeRoles('super_admin', 'admin'), RoleController.assignRole);
+router.patch('/users/:userId/role', authorizeRoles('super_admin'), RoleController.assignRole);
 
 // Активация / деактивация пользователя
 router.patch('/users/:userId/active', authorizeRoles('super_admin', 'admin'), RoleController.toggleUserActive);
