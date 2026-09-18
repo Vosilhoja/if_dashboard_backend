@@ -25,6 +25,8 @@ const cache = {};
 const inFlight = {};
 let sheetReadQueue = Promise.resolve();
 let backgroundRefreshInProgress = false;
+let backgroundRefreshTimer = null;
+let backgroundRefreshIntervalMs = BACKGROUND_REFRESH_MS;
 const dashboardMetricsCache = new Map();
 const dashboardMetricsInFlight = new Map();
 const MAX_DASHBOARD_METRICS_CACHE_ENTRIES = 32;
@@ -446,6 +448,7 @@ async function synchronizeSheets() {
         syncProgress.error = syncProgress.error || error.message || `Ошибка синхронизации ${type}`;
         return { type, added: 0, error: error.message || `Ошибка синхронизации ${type}` };
       }
+
     }),
   ).then((results) => {
     dashboardMetricsCache.clear();
@@ -464,6 +467,41 @@ async function synchronizeSheets() {
     syncInFlight = null;
   });
   return syncInFlight;
+}
+
+async function synchronizeSheet(type) {
+  if (!['main', 'numbers', 'eskiz', 'not_completed', 'survey_attempts'].includes(type)) {
+    throw Object.assign(new Error(`Неизвестный тип таблицы: "${type}"`), { status: 400 });
+  }
+  const startedAt = new Date().toISOString();
+  if (!syncProgress.active) {
+    syncProgress.active = true;
+    syncProgress.current = 0;
+    syncProgress.total = 1;
+    syncProgress.label = 'Подготовка';
+    syncProgress.error = null;
+    syncProgress.startedAt = startedAt;
+    syncProgress.completedAt = null;
+  }
+  try {
+    const result = await syncSheet(type);
+    dashboardMetricsCache.clear();
+    if (syncProgress.total === 1) {
+      syncProgress.current = 1;
+      syncProgress.label = type;
+      syncProgress.active = false;
+      syncProgress.completedAt = new Date().toISOString();
+    }
+    return { synchronizedAt: new Date().toISOString(), results: [result] };
+  } catch (error) {
+    if (syncProgress.total === 1) {
+      syncProgress.active = false;
+      syncProgress.error = error.message || `Ошибка синхронизации ${type}`;
+      syncProgress.label = type;
+      syncProgress.completedAt = new Date().toISOString();
+    }
+    throw error;
+  }
 }
 
 function getSyncStatus() {
@@ -633,7 +671,7 @@ async function prewarmDataCache() {
 }
 
 function startBackgroundDataRefresh() {
-  if (BACKGROUND_REFRESH_MS <= 0) {
+  if (backgroundRefreshIntervalMs <= 0) {
     console.log('[Data refresh] Автоматическая синхронизация отключена настройкой DATA_REFRESH_INTERVAL_MS.');
     return null;
   }
@@ -652,12 +690,33 @@ function startBackgroundDataRefresh() {
     }
   };
 
-  const timer = setInterval(() => {
+  backgroundRefreshTimer = setInterval(() => {
     void refresh();
-  }, BACKGROUND_REFRESH_MS);
-  timer.unref?.();
-  console.log(`[Data refresh] Автоматическая синхронизация включена: каждые ${Math.round(BACKGROUND_REFRESH_MS / 60000)} мин.`);
-  return timer;
+  }, backgroundRefreshIntervalMs);
+  backgroundRefreshTimer.unref?.();
+  console.log(`[Data refresh] Автоматическая синхронизация включена: каждые ${Math.round(backgroundRefreshIntervalMs / 60000)} мин.`);
+  return backgroundRefreshTimer;
+}
+
+function getAutoRefreshSettings() {
+  return {
+    enabled: backgroundRefreshIntervalMs > 0,
+    intervalMinutes: backgroundRefreshIntervalMs > 0 ? backgroundRefreshIntervalMs / 60000 : 0,
+  };
+}
+
+function setAutoRefreshSettings(intervalMinutes) {
+  const minutes = Number(intervalMinutes);
+  if (!Number.isInteger(minutes) || minutes < 0 || minutes > 1440) {
+    throw Object.assign(new Error('intervalMinutes must be an integer from 0 to 1440'), { status: 400 });
+  }
+  backgroundRefreshIntervalMs = minutes * 60000;
+  if (backgroundRefreshTimer) {
+    clearInterval(backgroundRefreshTimer);
+    backgroundRefreshTimer = null;
+  }
+  if (backgroundRefreshIntervalMs > 0) startBackgroundDataRefresh();
+  return getAutoRefreshSettings();
 }
 
 const SURVEY_REGION_NAMES = {
@@ -1333,6 +1392,7 @@ async function getSheetPaginated(
       const phone = normalizePhoneWithDiagnostics(getPhone(row)).normalized;
       row['ОТ поддержки?'] = phone && matchedPhonesSupport.has(phone) ? 'Да' : 'Нет';
     }
+
   }
 
   // Фильтрация по выбранным датам (startDate / endDate), если указаны даты
@@ -1436,10 +1496,41 @@ async function getSheetPaginated(
   };
 }
 
+async function searchSheetRecords({ query = '', sheets = [], limit = 100 } = {}) {
+  const needle = String(query).trim();
+  if (!needle) return { query: '', sheets: [], total: 0, records: [] };
+  const selected = (Array.isArray(sheets) ? sheets : [sheets])
+    .map(String)
+    .filter((type, index, list) => list.indexOf(type) === index);
+  const types = selected.length ? selected : ['main', 'numbers', 'eskiz', 'not_completed', 'survey_attempts'];
+  const safeLimit = Math.min(Math.max(Number.parseInt(String(limit), 10) || 100, 1), 500);
+  const phoneNeedle = normalizePhone(needle);
+  const lowerNeedle = needle.toLowerCase();
+  const records = [];
+  for (const type of types) {
+    if (!['main', 'numbers', 'eskiz', 'not_completed', 'survey_attempts'].includes(type)) continue;
+    const rows = cache[`sheet_${type}`]?.data || [];
+    for (const row of rows) {
+      const phone = normalizePhone(String(getPhone(row) || ''));
+      const valuesMatch = Object.values(row).some((value) =>
+        String(value ?? '').toLowerCase().includes(lowerNeedle)
+      );
+      if ((phoneNeedle && phone.includes(phoneNeedle)) || valuesMatch) {
+        records.push({ sheet: type, record: row });
+        if (records.length >= safeLimit) {
+          return { query: needle, sheets: types, total: records.length, records };
+        }
+      }
+    }
+  }
+  return { query: needle, sheets: types, total: records.length, records };
+}
+
 module.exports = {
   fetchAllRowsForSheet,
   fetchNewRowsForSheet,
   synchronizeSheets,
+  synchronizeSheet,
   getColumnDText,
   clearSheetCache,
   withDashboardMetricsSlot,
@@ -1453,4 +1544,7 @@ module.exports = {
   checkSheetConnection,
   classifyRegistrationSource,
   getSyncStatus,
+  getAutoRefreshSettings,
+  setAutoRefreshSettings,
+  searchSheetRecords,
 };

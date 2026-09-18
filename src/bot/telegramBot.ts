@@ -1,7 +1,7 @@
 const { Telegraf, Markup } = require('telegraf');
 const config = require('../config');
 const UserModel = require('../models/User');
-const { calculateDashboardMetrics } = require('../services/googleSheets');
+const { calculateDashboardMetrics, searchSheetRecords } = require('../services/googleSheets');
 const {
   consumeTelegramLinkCode,
   isTelegramLinkRateLimited,
@@ -14,6 +14,17 @@ function fmt(val) {
   if (val === undefined || val === null || val === '—') return '—';
   return val;
 }
+
+const SEARCH_SHEETS = new Set(['main', 'numbers', 'eskiz', 'not_completed', 'survey_attempts']);
+const SEARCH_SHEET_ALIASES = {
+  main_base: 'main',
+  mainbase: 'main',
+  main: 'main',
+  numbers: 'numbers',
+  eskiz: 'eskiz',
+  not_completed: 'not_completed',
+  survey_attempts: 'survey_attempts',
+};
 
 /**
  * Получить краткую сводку из Google Sheets (с кэшом ~3 мин)
@@ -52,8 +63,22 @@ function initTelegramBot() {
     console.warn('⚠️ [Telegram Bot] Токен бота не указан в .env. Бот не запущен.');
     return null;
   }
+  if (config.telegram.allowedIds.length === 0) {
+    console.warn('⚠️ [Telegram Bot] TELEGRAM_ALLOWED_IDS/TELEGRAM_ADMIN_IDS не настроен. Бот отключен.');
+    return null;
+  }
 
   const bot = new Telegraf(config.telegram.botToken);
+
+  // Keep the bot closed to arbitrary Telegram users. IDs are supplied only
+  // through environment configuration and are never derived from messages.
+  bot.use((ctx, next) => {
+    const tgId = String(ctx.from?.id || '');
+    if (!config.telegram.allowedIds.includes(tgId)) {
+      return ctx.reply('🔒 Доступ к этому боту ограничен.');
+    }
+    return next();
+  });
 
   // =========================================
   // /start — Приветствие и проверка привязки
@@ -170,6 +195,46 @@ function initTelegramBot() {
     );
   });
 
+  // /find <phone-or-id> [table] — return matching rows without dumping a table.
+  bot.command('find', async (ctx) => {
+    const parts = ctx.message.text.trim().split(/\s+/).slice(1);
+    const query = parts.shift() || '';
+    const requestedSheet = parts.shift()?.toLowerCase();
+    const sheet = requestedSheet ? SEARCH_SHEET_ALIASES[requestedSheet] : undefined;
+
+    if (!query) {
+      return ctx.reply(
+        'Формат: `/find <номер или ID> [таблица]`\n' +
+        'Таблицы: `main`, `numbers`, `eskiz`, `not_completed`, `survey_attempts`',
+        { parse_mode: 'Markdown' },
+      );
+    }
+    if (requestedSheet && !sheet) {
+      return ctx.reply('⚠️ Неизвестная таблица. Используйте `main`, `numbers`, `eskiz`, `not_completed` или `survey_attempts`.', { parse_mode: 'Markdown' });
+    }
+
+    try {
+      const result = await searchSheetRecords({
+        query,
+        sheets: sheet ? [sheet] : [...SEARCH_SHEETS],
+        limit: 5,
+      });
+      if (!result.records.length) return ctx.reply('Ничего не найдено.');
+
+      const messages = result.records.map(({ sheet: resultSheet, record }, index) => {
+        const entries = Object.entries(record)
+          .filter(([, value]) => String(value ?? '').trim() !== '')
+          .slice(0, 8)
+          .map(([key, value]) => `${key}: ${String(value).slice(0, 160)}`);
+        return `${index + 1}. ${resultSheet}\n${entries.join('\n')}`;
+      });
+      return ctx.reply(`🔎 Найдено: ${result.total}\n\n${messages.join('\n\n')}`);
+    } catch (error) {
+      console.error('[Bot /find error]:', error);
+      return ctx.reply('❌ Не удалось выполнить поиск. Попробуйте позже.');
+    }
+  });
+
   // =========================================
   // Кнопка: 📊 Сводка дашборда
   // =========================================
@@ -268,6 +333,7 @@ function initTelegramBot() {
       `• \`/start\` — Перезапустить бота\n` +
       `• \`/link <логин> <пароль>\` — Привязать аккаунт дашборда\n` +
       `• \`/stats\` — Быстрый отчет из Google Sheets\n` +
+      `• \`/find <номер или ID> [таблица]\` — Поиск записи без выгрузки всей таблицы\n` +
       `• \`/ping\` — Проверка состояния сервера\n\n` +
       `📊 Кнопки:\n` +
       `• *Сводка дашборда* — Все метрики в реальном времени\n` +

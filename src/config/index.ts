@@ -20,6 +20,13 @@ if (adminPassword && adminPassword.length < 12) {
 }
 
 const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN || '';
+const telegramAllowedIds = [process.env.TELEGRAM_ALLOWED_IDS, process.env.TELEGRAM_ADMIN_IDS]
+  .filter(Boolean)
+  .join(',')
+  .split(',')
+  .map(id => id.trim())
+  .filter(id => /^\d+$/.test(id))
+  .filter((id, index, ids) => ids.indexOf(id) === index);
 
 module.exports = {
   port: parseInt(process.env.PORT, 10) || 5000,
@@ -51,7 +58,8 @@ module.exports = {
   },
   telegram: {
     botToken: telegramBotToken,
-    adminIds: (process.env.TELEGRAM_ADMIN_IDS || '').split(',').map(id => id.trim()).filter(Boolean)
+    allowedIds: telegramAllowedIds,
+    adminIds: telegramAllowedIds
   },
   google: {
     sheetMain: process.env.GOOGLE_SHEET_MAIN,

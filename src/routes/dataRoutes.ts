@@ -8,6 +8,10 @@ const {
   getPeriodDetails,
   getSheetPaginated,
   getSyncStatus,
+  synchronizeSheet,
+  getAutoRefreshSettings,
+  setAutoRefreshSettings,
+  searchSheetRecords,
 } = require('../services/googleSheets');
 const { getAnalyticsData } = require('../services/analyticsService');
 const { synchronizeSheets } = require('../services/googleSheets');
@@ -24,6 +28,27 @@ router.get('/sync/status', authenticateToken, dashboardLimiter, (req, res) => {
   return res.status(200).json(getSyncStatus());
 });
 
+router.post('/sheets/:type/sync', authenticateToken, dashboardRefreshLimiter, async (req, res, next) => {
+  try {
+    return res.status(200).json(await synchronizeSheet(req.params.type));
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/settings', authenticateToken, dashboardLimiter, (req, res) => {
+  return res.status(200).json({ autoRefresh: getAutoRefreshSettings() });
+});
+
+router.put('/settings', authenticateToken, authorizeRoles('super_admin', 'admin'), (req, res, next) => {
+  try {
+    const intervalMinutes = req.body?.autoRefresh?.intervalMinutes ?? req.body?.intervalMinutes;
+    return res.status(200).json({ autoRefresh: setAutoRefreshSettings(intervalMinutes) });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.post('/sheets/:type/full-reload', authenticateToken, dashboardRefreshLimiter, async (req, res, next) => {
   try {
     const { reloadSheetFully } = require('../services/googleSheets');
@@ -37,6 +62,25 @@ router.get('/sheets/:type/connection', authenticateToken, dashboardLimiter, asyn
   try {
     const { checkSheetConnection } = require('../services/googleSheets');
     return res.status(200).json(await checkSheetConnection(req.params.type));
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Search only matching records in the selected cached sheets. This endpoint
+// deliberately returns records, not a paginated/full-table payload.
+router.get('/search', authenticateToken, dashboardLimiter, async (req, res, next) => {
+  try {
+    const sheets = String(req.query.sheets || '')
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean);
+    const query = req.query.q || req.query.query || req.query.phone || req.query.id || '';
+    return res.status(200).json(await searchSheetRecords({
+      query,
+      sheets,
+      limit: req.query.limit,
+    }));
   } catch (error) {
     next(error);
   }
@@ -164,6 +208,7 @@ router.get('/settings-info', authenticateToken, (req, res) => {
   return res.status(200).json({
     settingsUrl: statusSettingsUrl,
     sheets,
+    autoRefresh: getAutoRefreshSettings(),
   });
 });
 
