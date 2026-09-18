@@ -24,6 +24,7 @@ const { initTelegramBot } = require('./bot/telegramBot');
 const {
   prewarmDataCache,
   startBackgroundDataRefresh,
+  restoreSheetCacheFromRedis,
 } = require('./services/googleSheets');
 const { startCallWorker } = require('./services/worker.service');
 const {
@@ -153,6 +154,7 @@ async function startServer() {
     // Наполнение пользователями по умолчанию
     await seedDefaultUsers();
 
+    await restoreSheetCacheFromRedis();
     startBackgroundDataRefresh();
     // Google Sheets worker is optional at boot: API and health endpoint must
     // remain available while Railway variables are being configured.

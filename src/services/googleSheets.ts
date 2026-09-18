@@ -2,6 +2,7 @@ const { fetchSheetRaw, fetchSheetDelta, rowsToObjects, getSheetMetadata } = requ
 const config = require('../config');
 const { parseSheetDate, isDateInRange } = require('../utils/dateUtils');
 const { normalizePhoneWithDiagnostics, normalizePhone } = require('../utils/phoneUtils');
+const Redis = require('ioredis');
 const {
   STATUS_CONFIG,
   isLinkSentStatus,
@@ -23,6 +24,11 @@ const SHEET_REQUEST_RETRY_LIMIT = 4;
 const SHEET_REQUEST_BACKOFF_BASE_MS = 1000;
 const cache = {};
 const inFlight = {};
+const REDIS_CACHE_PREFIX = 'hurmo:sheetcache:';
+const REDIS_CACHE_TTL_SEC = 24 * 60 * 60;
+const redisCache = process.env.REDIS_URL
+  ? new Redis(process.env.REDIS_URL, { lazyConnect: true, maxRetriesPerRequest: null })
+  : null;
 let sheetReadQueue = Promise.resolve();
 let backgroundRefreshInProgress = false;
 let backgroundRefreshTimer = null;
@@ -48,6 +54,43 @@ const syncProgress = {
 // builds phone/date indexes. Running two calculations concurrently can exceed
 // Railway's memory limit with the production-sized sheets.
 const MAX_DASHBOARD_METRICS_CONCURRENCY = 1;
+
+async function persistSheetCache(type) {
+  const entry = cache[`sheet_${type}`];
+  if (!entry || !redisCache) return;
+  try {
+    await redisCache.set(
+      REDIS_CACHE_PREFIX + type,
+      JSON.stringify({
+        data: entry.data,
+        headers: entry.headers,
+        sourceRowCount: entry.sourceRowCount,
+        timestamp: entry.timestamp,
+      }),
+      'EX',
+      REDIS_CACHE_TTL_SEC,
+    );
+  } catch (error) {
+    console.warn(`[Redis persist] Не удалось сохранить кэш "${type}":`, error.message || error);
+  }
+}
+
+async function restoreSheetCacheFromRedis() {
+  if (!redisCache) return;
+  const sheetTypes = ['main', 'numbers', 'eskiz', 'not_completed', 'survey_attempts'];
+  await Promise.all(sheetTypes.map(async (type) => {
+    try {
+      const raw = await redisCache.get(REDIS_CACHE_PREFIX + type);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed.data) || !Array.isArray(parsed.headers)) return;
+      cache[`sheet_${type}`] = parsed;
+      console.log(`[Redis restore] "${type}": ${parsed.data.length} строк восстановлено`);
+    } catch (error) {
+      console.warn(`[Redis restore] Не удалось восстановить "${type}":`, error.message || error);
+    }
+  }));
+}
 
 function normalizeHeader(value) {
   return String(value || '')
@@ -161,6 +204,48 @@ function classifyRegistrationSource(source) {
   const value = String(source ?? '').trim().toLowerCase();
   if (!value) return null;
   return /(bot|бот|telegram|телеграм|o'?zi|o`zi|сам(остоятельно)?|сайт(а|ом)?)/i.test(value);
+}
+
+const mainDerivedCache = {
+  timestamp: 0,
+  phoneDiagnostics: null,
+  registrationsByPhone: null,
+  mainPhones: null,
+  unknownSource: null,
+};
+
+function getMainDerived(mainRows, snapshotTimestamp) {
+  if (mainDerivedCache.timestamp === snapshotTimestamp && mainDerivedCache.registrationsByPhone) {
+    return mainDerivedCache;
+  }
+  const phoneDiagnostics = { corrupted: 0, truncated: 0, invalid: 0, foreign: 0 };
+  const registrationsByPhone = new Map();
+  const mainPhones = new Set();
+  const unknownSource = new Set();
+
+  for (const row of mainRows) {
+    const diag = normalizePhoneWithDiagnostics(getPhone(row));
+    if (diag.status === 'corrupted_scientific') phoneDiagnostics.corrupted++;
+    else if (diag.status === 'truncated') phoneDiagnostics.truncated++;
+    else if (diag.status === 'invalid') phoneDiagnostics.invalid++;
+    else if (diag.status === 'foreign') phoneDiagnostics.foreign++;
+    if (!diag.normalized) continue;
+    mainPhones.add(diag.normalized);
+    const sourceClass = classifyRegistrationSource(getMainRegistrationSource(row));
+    if (sourceClass === null) unknownSource.add(diag.normalized);
+    const date = parseSheetDate(getMainRegistrationDate(row));
+    if (!date) continue;
+    const registrations = registrationsByPhone.get(diag.normalized) || [];
+    registrations.push({ date, fromBot: sourceClass === true, sourceUnknown: sourceClass === null });
+    registrationsByPhone.set(diag.normalized, registrations);
+  }
+
+  mainDerivedCache.timestamp = snapshotTimestamp;
+  mainDerivedCache.phoneDiagnostics = phoneDiagnostics;
+  mainDerivedCache.registrationsByPhone = registrationsByPhone;
+  mainDerivedCache.mainPhones = mainPhones;
+  mainDerivedCache.unknownSource = unknownSource;
+  return mainDerivedCache;
 }
 
 /**
@@ -306,11 +391,18 @@ async function fetchAllRowsForSheet(type, forceRefresh = false) {
   const now = Date.now();
 
   if (!forceRefresh && !cache[cacheKey]) {
-    const error = Object.assign(
-      new Error(`Данные таблицы "${type}" ещё синхронизируются`),
-      { status: 503 },
-    );
-    throw error;
+    if (!inFlight[cacheKey]) {
+      void fetchAllRowsForSheet(type, true);
+    }
+    const timeoutMs = 15_000;
+    const waitForWarmup = inFlight[cacheKey] || Promise.reject(new Error(`Прогрев таблицы "${type}" не запущен`));
+    const timeout = new Promise((_, reject) => {
+      setTimeout(() => reject(Object.assign(
+        new Error(`Истекло ожидание прогрева таблицы "${type}"`),
+        { status: 503 },
+      )), timeoutMs);
+    });
+    return Promise.race([waitForWarmup, timeout]);
   }
 
   if (!forceRefresh && cache[cacheKey]) {
@@ -346,6 +438,7 @@ async function fetchAllRowsForSheet(type, forceRefresh = false) {
           sourceRowCount: rows.length + 1,
           timestamp: Date.now(),
         };
+        void persistSheetCache(type);
         if (oldData) oldData.length = 0;
         return data;
       } catch (err) {
@@ -411,6 +504,7 @@ async function syncSheet(type) {
     const { headers, rows } = await fetchSheetRaw(sheetId, sheetHint);
     const data = rowsToObjects(headers, rows);
     cache[cacheKey] = { data, headers, sourceRowCount: rows.length + 1, timestamp: Date.now() };
+    void persistSheetCache(type);
     return { type, added: data.length, total: data.length, initialized: true };
   }
 
@@ -420,6 +514,7 @@ async function syncSheet(type) {
   if (addedRows.length > 0) current.data.push(...addedRows);
   current.sourceRowCount = Math.max(current.sourceRowCount, delta.rowCount);
   current.timestamp = Date.now();
+  void persistSheetCache(type);
   return { type, added: addedRows.length, total: current.data.length, initialized: false };
 }
 
@@ -591,6 +686,7 @@ async function reloadSheetFully(type) {
       sourceRowCount: rows.length + 1,
       timestamp: Date.now(),
     };
+    void persistSheetCache(type);
     dashboardMetricsCache.clear();
     return {
       type,
@@ -925,54 +1021,15 @@ async function calculateDashboardMetrics(query: any = {}) {
     );
 
   // 1. Быстрый поиск номеров main_base и сбор телефонной диагностики
+  const derived = mainError
+    ? { phoneDiagnostics: { corrupted: 0, truncated: 0, invalid: 0, foreign: 0 }, registrationsByPhone: new Map(), mainPhones: new Set(), unknownSource: new Set() }
+    : getMainDerived(mainRows, cache['sheet_main']?.timestamp || 0);
   const phoneDiagnostics = {
-    corrupted: 0,
-    truncated: 0,
-    invalid: 0,
-    foreign: 0,
+    ...derived.phoneDiagnostics,
   };
-
-  if (!mainError) {
-    for (const row of mainRows) {
-      const rawP = getPhone(row);
-      const diag = normalizePhoneWithDiagnostics(rawP);
-      if (diag.status === 'corrupted_scientific') phoneDiagnostics.corrupted++;
-      else if (diag.status === 'truncated') phoneDiagnostics.truncated++;
-      else if (diag.status === 'invalid') phoneDiagnostics.invalid++;
-      else if (diag.status === 'foreign') phoneDiagnostics.foreign++;
-
-    }
-  }
-
-  // Для связи звонков с регистрациями сохраняем все регистрации каждого
-  // телефона: даты нужны для строгой метрики повторных звонков.
-  const mainRegistrationsByPhone = new Map();
-  const mainPhones = new Set();
-  const mainHasUnknownSourceRegistration = new Set();
-  if (!mainError) {
-    for (const row of mainRows) {
-      const dateStr = getMainRegistrationDate(row);
-      const registrationDate = parseSheetDate(dateStr);
-      const phone = normalizePhoneWithDiagnostics(
-        getPhone(row)
-      ).normalized;
-      if (!phone) continue;
-      mainPhones.add(phone);
-      const sourceClass = classifyRegistrationSource(getMainRegistrationSource(row));
-      if (sourceClass === null) {
-        mainHasUnknownSourceRegistration.add(phone);
-      }
-      if (!registrationDate) continue;
-
-      const registrations = mainRegistrationsByPhone.get(phone) || [];
-      registrations.push({
-        date: registrationDate,
-        fromBot: sourceClass === true,
-        sourceUnknown: sourceClass === null,
-      });
-      mainRegistrationsByPhone.set(phone, registrations);
-    }
-  }
+  const mainRegistrationsByPhone = derived.registrationsByPhone;
+  const mainPhones = derived.mainPhones;
+  const mainHasUnknownSourceRegistration = derived.unknownSource;
 
   // Метрика 1: Звонки за период
   let callsCountVal = 0;
@@ -1544,6 +1601,7 @@ module.exports = {
   checkSheetConnection,
   classifyRegistrationSource,
   getSyncStatus,
+  restoreSheetCacheFromRedis,
   getAutoRefreshSettings,
   setAutoRefreshSettings,
   searchSheetRecords,
