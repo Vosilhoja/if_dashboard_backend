@@ -1219,14 +1219,38 @@ async function getSheetPaginated(
   sortDirection = 'asc',
   filterColumn = '',
   filterValue = '',
+  startDate = '',
+  endDate = '',
 ) {
   const cacheKey = `sheet_${type}`;
   const allRows = cache[cacheKey]?.data || [];
   if (type === 'not_completed' || type === 'main') {
     const numbersRows = cache['sheet_numbers']?.data || [];
-    const numbers = new Set(numbersRows.map((row) => normalizePhone(getPhone(row))).filter(Boolean));
+
+    // Build a set of phones from the numbers sheet filtered by the selected date range.
+    // This mirrors the logic used in calculateDashboardMetrics for "От поддержки":
+    // a main_base row is counted as "from support" only if its phone appears in a
+    // call record whose date falls within the requested period.
+    const numbersInPeriod = (startDate || endDate)
+      ? numbersRows.filter((row) => {
+          const d = parseSheetDate(getCallDate(row));
+          return isDateInRange(d, startDate, endDate);
+        })
+      : numbersRows;
+
+    // Build set of all phones in main_base (unfiltered) — same as mainPhones in metrics
+    const mainPhones = new Set(allRows.map((row) => normalizePhone(getPhone(row))).filter(Boolean));
+
+    // Phones called within the period
+    const calledPhonesInPeriod = new Set(
+      numbersInPeriod.map((row) => normalizePhone(getPhone(row))).filter(Boolean)
+    );
+
     for (const row of allRows) {
-      row['ОТ поддержки?'] = numbers.has(normalizePhone(getPhone(row))) ? 'Да' : 'Нет';
+      const phone = normalizePhone(getPhone(row));
+      // A row is "from support" when the phone was called in the selected period
+      // AND exists in main_base (same cross-check as the dashboard metric)
+      row['ОТ поддержки?'] = phone && calledPhonesInPeriod.has(phone) && mainPhones.has(phone) ? 'Да' : 'Нет';
     }
   }
   const pageData = await fetchSheetPage(type, page, pageSize);

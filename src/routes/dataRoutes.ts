@@ -186,6 +186,8 @@ router.get('/sheets/:type', authenticateToken, dashboardLimiter, dashboardRefres
     const sortDirection = req.query.sortDirection === 'desc' ? 'desc' : 'asc';
     const filterColumn = String(req.query.filterColumn || '');
     const filterValue = String(req.query.filterValue || '');
+    const startDate = String(req.query.startDate || '');
+    const endDate = String(req.query.endDate || '');
 
     const data = await getSheetPaginated(
       type,
@@ -197,6 +199,8 @@ router.get('/sheets/:type', authenticateToken, dashboardLimiter, dashboardRefres
       sortDirection,
       filterColumn,
       filterValue,
+      startDate,
+      endDate,
     );
     return res.status(200).json(data);
   } catch (error) {
