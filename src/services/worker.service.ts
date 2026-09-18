@@ -1,10 +1,9 @@
-import { Job, Worker } from 'bullmq';
+const { Job, Worker } = require('bullmq');
 const config = require('../config');
-import {
+const {
   CALL_QUEUE_NAME,
-  CallQueuePayload,
-} from './queue.service';
-import { GoogleSheetsService, SheetRow } from './googleSheets.service';
+} = require('./queue.service');
+const { GoogleSheetsService } = require('./googleSheets.service');
 
 function redisConnection() {
   const redisUrl = new URL(process.env.REDIS_URL || 'redis://127.0.0.1:6379');
@@ -13,11 +12,11 @@ function redisConnection() {
     port: Number(redisUrl.port || 6379),
     username: redisUrl.username ? decodeURIComponent(redisUrl.username) : undefined,
     password: redisUrl.password ? decodeURIComponent(redisUrl.password) : undefined,
-    maxRetriesPerRequest: null as null,
+    maxRetriesPerRequest: null,
   };
 }
 
-function toRow(call: CallQueuePayload): SheetRow {
+function toRow(call) {
   return [
     new Date().toISOString(),
     call.operatorId,
@@ -31,7 +30,7 @@ function toRow(call: CallQueuePayload): SheetRow {
   ];
 }
 
-export function startCallWorker() {
+function startCallWorker() {
   const clientEmail = String(config.google.clientEmail || '').trim();
   const privateKey = String(config.google.privateKey || '').trim();
   const spreadsheetId = String(config.google.sheetCalls || '').trim();
@@ -52,14 +51,9 @@ export function startCallWorker() {
 
   const batchSize = Math.max(1, Number(process.env.CALL_WORKER_BATCH_SIZE || 25));
   const batchWindowMs = Math.max(25, Number(process.env.CALL_WORKER_BATCH_WINDOW_MS || 200));
-  type PendingJob = {
-    job: Job<CallQueuePayload>;
-    resolve: () => void;
-    reject: (error: Error) => void;
-  };
-  let pending: PendingJob[] = [];
-  let flushTimer: NodeJS.Timeout | undefined;
-  let flushing: Promise<void> = Promise.resolve();
+  let pending = [];
+  let flushTimer;
+  let flushing = Promise.resolve();
 
   const flush = async () => {
     if (!pending.length) return;
@@ -75,8 +69,8 @@ export function startCallWorker() {
     }
   };
 
-  const enqueueForBatch = (job: Job<CallQueuePayload>) =>
-    new Promise<void>((resolve, reject) => {
+  const enqueueForBatch = (job) =>
+    new Promise((resolve, reject) => {
       pending.push({ job, resolve, reject });
       if (pending.length >= batchSize) {
         if (flushTimer) clearTimeout(flushTimer);
@@ -90,9 +84,9 @@ export function startCallWorker() {
       }
     });
 
-  const worker = new Worker<CallQueuePayload>(
+  const worker = new Worker(
     CALL_QUEUE_NAME,
-    async (job: Job<CallQueuePayload>) => {
+    async (job) => {
       await enqueueForBatch(job);
     },
     {
@@ -113,3 +107,7 @@ export function startCallWorker() {
 
   return worker;
 }
+
+module.exports = {
+  startCallWorker,
+};

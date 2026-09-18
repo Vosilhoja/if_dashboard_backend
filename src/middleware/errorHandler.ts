@@ -18,7 +18,7 @@ function errorHandler(err, req, res, next) {
     });
   }
 
-  const parseError = err as SyntaxError & { status?: number; body?: unknown; type?: string };
+  const parseError = err;
   if (err instanceof SyntaxError && parseError.status === 400 && parseError.body !== undefined) {
     return res.status(400).json({
       status: 'fail',

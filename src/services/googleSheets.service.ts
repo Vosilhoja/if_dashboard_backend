@@ -1,19 +1,10 @@
-import { google, sheets_v4 } from 'googleapis';
+const { google } = require('googleapis');
 
-export interface GoogleSheetsConfig {
-  clientEmail: string;
-  privateKey: string;
-  spreadsheetId: string;
-  sheetName?: string;
-}
+class GoogleSheetsService {
+  client;
+  config;
 
-export type SheetRow = Array<string | number | boolean | null>;
-
-export class GoogleSheetsService {
-  private readonly client: sheets_v4.Sheets;
-  private readonly config: GoogleSheetsConfig;
-
-  constructor(config: GoogleSheetsConfig) {
+  constructor(config) {
     const privateKey = config.privateKey
       .replace(/^['"]|['"]$/g, '')
       .replace(/\\n/g, '\n');
@@ -33,7 +24,7 @@ export class GoogleSheetsService {
     this.client = google.sheets({ version: 'v4', auth });
   }
 
-  async appendRows(rows: SheetRow[]): Promise<void> {
+  async appendRows(rows) {
     if (rows.length === 0) return;
 
     await this.client.spreadsheets.values.append({
@@ -45,3 +36,7 @@ export class GoogleSheetsService {
     });
   }
 }
+
+module.exports = {
+  GoogleSheetsService,
+};

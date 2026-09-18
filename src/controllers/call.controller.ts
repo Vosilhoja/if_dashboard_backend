@@ -1,13 +1,8 @@
-import { Request, Response, NextFunction } from 'express';
-import { enqueueCall, CallQueuePayload } from '../services/queue.service';
+const { enqueueCall } = require('../services/queue.service');
 
-export async function createCall(
-  req: Request,
-  res: Response,
-  next: NextFunction
-) {
+async function createCall(req, res, next) {
   try {
-    const result = await enqueueCall(req.body as CallQueuePayload);
+    const result = await enqueueCall(req.body);
     return res.status(202).json({
       status: 'queued',
       message: 'Успешно добавлено в очередь',
@@ -17,3 +12,7 @@ export async function createCall(
     return next(error);
   }
 }
+
+module.exports = {
+  createCall,
+};

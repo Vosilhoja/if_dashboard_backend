@@ -20,14 +20,12 @@ const protectedEndpoints = [
   ['GET', '/api/data/search?q=123'],
   ['GET', '/api/data/sheets/main'],
   ['POST', '/api/calls'],
-  ['GET', '/api/ai/history'],
-  ['DELETE', '/api/ai/history'],
-  ['POST', '/api/ai/chat'],
-  ['POST', '/api/ai/insights'],
   ['GET', '/api/stats/weekly'],
   ['GET', '/api/stats/monthly'],
   ['GET', '/api/stats/summary'],
   ['GET', '/api/status/test'],
+  ['GET', '/api/tasks'],
+  ['POST', '/api/tasks'],
 ];
 
 function request(server, method, path) {

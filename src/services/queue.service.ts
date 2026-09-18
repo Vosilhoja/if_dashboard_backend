@@ -1,18 +1,6 @@
-import { Queue } from 'bullmq';
+const { Queue } = require('bullmq');
 
-export interface CallQueuePayload {
-  operatorId: string;
-  phone: string;
-  startedAt: string;
-  endedAt?: string;
-  status: string;
-  comment?: string;
-  clientName?: string;
-  metadata?: Record<string, string | number | boolean | null>;
-  idempotencyKey?: string;
-}
-
-export const CALL_QUEUE_NAME = process.env.CALL_QUEUE_NAME || 'call-submissions';
+const CALL_QUEUE_NAME = process.env.CALL_QUEUE_NAME || 'call-submissions';
 
 function redisConnection() {
   const redisUrl = new URL(process.env.REDIS_URL || 'redis://127.0.0.1:6379');
@@ -21,12 +9,12 @@ function redisConnection() {
     port: Number(redisUrl.port || 6379),
     username: redisUrl.username ? decodeURIComponent(redisUrl.username) : undefined,
     password: redisUrl.password ? decodeURIComponent(redisUrl.password) : undefined,
-    maxRetriesPerRequest: null as null,
+    maxRetriesPerRequest: null,
   };
 }
 
 const callQueue = process.env.REDIS_URL
-  ? new Queue<CallQueuePayload>(CALL_QUEUE_NAME, {
+  ? new Queue(CALL_QUEUE_NAME, {
     connection: redisConnection(),
     defaultJobOptions: {
       attempts: Number(process.env.CALL_QUEUE_ATTEMPTS || 8),
@@ -40,7 +28,7 @@ const callQueue = process.env.REDIS_URL
     })
   : null;
 
-export async function enqueueCall(payload: CallQueuePayload) {
+async function enqueueCall(payload) {
   if (!callQueue) {
     throw new Error('Очередь звонков недоступна: REDIS_URL не настроен.');
   }
@@ -50,3 +38,8 @@ export async function enqueueCall(payload: CallQueuePayload) {
   });
   return { jobId: job.id, queue: CALL_QUEUE_NAME };
 }
+
+module.exports = {
+  CALL_QUEUE_NAME,
+  enqueueCall,
+};

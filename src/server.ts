@@ -9,11 +9,9 @@ const { seedDefaultUsers } = require('./db/seed');
 const { apiLimiter } = require('./middleware/rateLimiter');
 const { notFoundHandler, errorHandler } = require('./middleware/errorHandler');
 
-// Маршруты
 const authRoutes = require('./routes/authRoutes');
 const roleRoutes = require('./routes/roleRoutes');
 const dataRoutes = require('./routes/dataRoutes');
-const aiRoutes = require('./routes/aiRoutes');
 const statsRoutes = require('./routes/statsRoutes');
 const callRoutes = require('./routes/callRoutes');
 const statusRoutes = require('./routes/statusRoutes');
@@ -21,7 +19,6 @@ const statusAdminRoutes = require('./routes/statusAdminRoutes');
 const taskRoutes = require('./routes/taskRoutes');
 const systemRoutes = require('./routes/systemRoutes');
 
-// Инициализация Telegram Бота
 const { initTelegramBot } = require('./bot/telegramBot');
 const {
   prewarmDataCache,
@@ -36,41 +33,84 @@ const {
 
 const app = express();
 
-// Trust reverse proxy (Fly.io, Vercel) for accurate IP detection and rate limiting
+const supervisorState = {
+  dbReconnectAttempts: 0,
+  lastDbReconnect: 0,
+  restartCount: Number(process.env.SUPERVISOR_RESTART_COUNT || 0),
+  maxRestarts: 5,
+  restartWindowMs: 300_000,
+  restartsTimestamps: [],
+};
+
+async function ensureDatabaseConnection() {
+  const { pool, initDatabase, isPgConnected } = require('./db');
+  if (isPgConnected() && pool) {
+    try {
+      await pool.query('SELECT 1');
+      supervisorState.dbReconnectAttempts = 0;
+      return true;
+    } catch (pingError) {
+      console.warn('[Supervisor] PostgreSQL пинг не прошел: ' + pingError.message);
+    }
+  }
+  const now = Date.now();
+  const backoff = Math.min(60_000, 2_000 * Math.pow(2, Math.min(supervisorState.dbReconnectAttempts, 6)));
+  if (now - supervisorState.lastDbReconnect < backoff) return false;
+  supervisorState.lastDbReconnect = now;
+  supervisorState.dbReconnectAttempts += 1;
+  console.log('[Supervisor] Попытка переподключения к PostgreSQL #' + supervisorState.dbReconnectAttempts);
+  try {
+    const ok = await initDatabase();
+    if (ok) {
+      console.log('[Supervisor] PostgreSQL восстановлен');
+      supervisorState.dbReconnectAttempts = 0;
+      return true;
+    }
+  } catch (err) {
+    console.warn('[Supervisor] Не удалось восстановить БД: ' + err.message);
+  }
+  return false;
+}
+
+function startSupervisor() {
+  const { restoreSheetCacheFromRedis: restore } = require('./services/googleSheets');
+  console.log('[Supervisor] Запущен мониторинг подсистем');
+  setInterval(async () => {
+    await ensureDatabaseConnection();
+  }, 15_000);
+  if (process.env.REDIS_URL) {
+    setInterval(() => {
+      restore().catch((err) =>
+        console.warn('[Supervisor] Redis restore warning: ' + err.message)
+      );
+    }, 5 * 60_000);
+  }
+}
+
 app.set('trust proxy', 1);
 
-// ==========================================
-// 🛡️ SECURITY & UTILITY MIDDLEWARES
-// ==========================================
-
-// 1. Helmet — защита заголовков HTTP
 app.use(helmet());
 
-// 2. CORS — строгая политика источников (разрешаем Next.js фронтенд на Vercel и локально)
 const allowedOrigins = [
   config.clientUrl,
   'http://localhost:3000',
   'http://127.0.0.1:3000',
   'https://if-dashboard.vercel.app',
   'https://if-dashboard-git-main-vosilhoja.vercel.app',
-  // Railway backend — self-requests allowed
+  'https://if-dashboard-six.vercel.app',
   'https://ifdashboardbackend-production.up.railway.app',
 ].filter(Boolean);
 
 app.use(cors({
   origin: function (origin, callback) {
     if (!origin) return callback(null, true);
-    
-    // Check direct matches
     if (allowedOrigins.indexOf(origin) !== -1) {
       return callback(null, true);
     }
-
     if (config.nodeEnv === 'development') {
       return callback(null, true);
     }
-
-    console.warn(`[CORS] Blocked request from origin: ${origin}`);
+    console.warn('[CORS] Blocked request from origin: ' + origin);
     callback(new Error('Запрос заблокирован политикой CORS'));
   },
   credentials: true,
@@ -78,7 +118,6 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization', 'x-access-token']
 }));
 
-// 3. Structured request logging with automatic duration and status fields.
 app.use(pinoHttp({
   level: config.nodeEnv === 'production' ? 'info' : 'silent',
   redact: {
@@ -91,26 +130,35 @@ app.use(pinoHttp({
   },
 }));
 
-// 4. Body Parsers: allow realistic dashboard / AI payloads without permitting unbounded uploads.
 app.use(express.json({ limit: config.requestBodyLimit || '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: config.requestBodyLimit || '10mb', parameterLimit: 50000 }));
 
-// 5. Global API Rate Limiter
 app.use('/api', apiLimiter);
 
-// ==========================================
-// 🌐 API ROUTES
-// ==========================================
-
-// Health Check / Ping
-app.get('/health', (req, res) => {
+app.get('/health', async (req, res) => {
   const memory = process.memoryUsage();
+  const { isPgConnected, pool } = require('./db');
+  let dbOk = false;
+  try {
+    if (isPgConnected() && pool) { await pool.query('SELECT 1'); dbOk = true; }
+  } catch (_) { dbOk = false; }
+  const subsystems = {
+    postgres: dbOk ? 'healthy' : (config.db.enabled ? 'degraded' : 'disabled'),
+    cache: 'healthy',
+    telegram: config.telegram.botToken ? (config.telegram.allowedIds.length ? 'healthy' : 'degraded') : 'disabled',
+  };
+  const overallDegraded = Object.values(subsystems).some(value => value === 'degraded');
   res.status(200).json({
-    status: 'OK',
+    status: overallDegraded ? 'DEGRADED' : 'OK',
     timestamp: new Date().toISOString(),
     service: 'HURMO UZ Backend API',
-    version: '1.0.0',
+    version: '1.1.0',
     uptime: process.uptime(),
+    supervisor: {
+      restartCount: supervisorState.restartCount,
+      dbReconnectAttempts: supervisorState.dbReconnectAttempts,
+    },
+    subsystems,
     memory: {
       rssMb: Math.round(memory.rss / 1024 / 1024),
       heapUsedMb: Math.round(memory.heapUsed / 1024 / 1024),
@@ -119,95 +167,78 @@ app.get('/health', (req, res) => {
   });
 });
 
-// Модуль Авторизации (Login, JWT, Profile)
 app.use('/api/auth', authRoutes);
-
-// Модуль Управления Ролями и Пользователями (RBAC)
 app.use('/api/admin', roleRoutes);
 app.use('/api/admin', statusAdminRoutes);
-
-// Модуль Данных Дашборда (Google Sheets Metrics, Period Details, CRUD)
 app.use('/api/data', dataRoutes);
 app.use('/api/calls', callRoutes);
-
-// Модуль AI (Gemini) — все вызовы AI API только с бэкенда
-app.use('/api/ai', aiRoutes);
-
-// Модуль Агрегированной Статистики (Weekly, Monthly, Summary с in-memory кешем)
 app.use('/api/stats', statsRoutes);
 app.use('/api/status', statusRoutes);
 app.use('/api/tasks', taskRoutes);
 app.use('/api/system', systemRoutes);
 
-// 404 & Centralized Error Handlers
 app.use(notFoundHandler);
 app.use(errorHandler);
 
-// ==========================================
-// 🚀 SERVER LAUNCH & INITIALIZATION
-// ==========================================
-
 async function startServer() {
   try {
-    console.log('🔄 [Bootstrap] Инициализация баз данных и системных служб...');
-    
-    // Подключение к БД
+    console.log('[Bootstrap] Инициализация баз данных и системных служб...');
     await initDatabase();
     await loadLearnedPhrasesFromDb();
-
-    // Наполнение пользователями по умолчанию
     await seedDefaultUsers();
-
     await restoreSheetCacheFromRedis();
     startBackgroundDataRefresh();
-    // Google Sheets worker is optional at boot: API and health endpoint must
-    // remain available while Railway variables are being configured.
     startCallWorker();
     startStatusClassifierWorker();
     startStatusSuggestionScheduler();
 
-    // Open the port before the initial Google Sheets sync. Health checks and
-    // cached requests must not wait 30-50 seconds for an external API.
     app.listen(config.port, '0.0.0.0', () => {
       console.log('====================================================');
-      console.log(`🚀 [HURMO Backend] Сервер успешно запущен на порту: ${config.port}`);
-      console.log(`📡 URL API: http://localhost:${config.port}`);
-      console.log(`🛡️ Режим: ${config.nodeEnv.toUpperCase()}`);
-      console.log(`🔐 Авторизация: JWT + Bcrypt + Rate-Limiting + RBAC`);
+      console.log('[HURMO Backend] Сервер успешно запущен на порту: ' + config.port);
+      console.log('URL API: http://localhost:' + config.port);
+      console.log('Режим: ' + String(config.nodeEnv).toUpperCase());
+      console.log('Авторизация: JWT + Bcrypt + Rate-Limiting + RBAC');
       console.log('====================================================');
-
-      // Запуск Telegram Бота
       initTelegramBot();
     });
 
-    // Initial sync runs after the server is available and is bounded by the
-    // prewarm timeout. Subsequent reads use the in-memory snapshot.
-    void prewarmDataCache().catch((error) => {
-      console.error('❌ [Bootstrap] Начальная синхронизация не выполнена:', error);
+    startSupervisor();
+
+    prewarmDataCache().catch((error) => {
+      console.error('[Bootstrap] Начальная синхронизация не выполнена:', error);
     });
   } catch (error) {
-    console.error('❌ Фатальная ошибка при запуске сервера:', error);
+    console.error('Фатальная ошибка при запуске сервера:', error);
     process.exit(1);
   }
 }
 
-// ==========================================
-// 🛡️ GLOBAL ERROR HANDLERS (prevent silent crashes)
-// ==========================================
-process.on('uncaughtException', (error) => {
-  console.error('❌ [UNCAUGHT EXCEPTION] Необработанное исключение:', error);
-  console.error('[UNCAUGHT EXCEPTION] Stack:', error.stack);
-  // Give time to log before exit
+process.on('uncaughtException', (error: any) => {
+  console.error('[UNCAUGHT EXCEPTION] Необработанное исключение:', error);
+  console.error('[UNCAUGHT EXCEPTION] Stack:', error && error.stack);
+  const now = Date.now();
+  supervisorState.restartsTimestamps = supervisorState.restartsTimestamps.filter(ts => now - ts < supervisorState.restartWindowMs);
+  supervisorState.restartsTimestamps.push(now);
+  const errCode = String((error && error.code) || '');
+  if (supervisorState.restartsTimestamps.length < supervisorState.maxRestarts && errCode !== 'ERR_HTTP_HEADERS_SENT') {
+    console.warn('[Supervisor] Попытка самовосстановления (' + supervisorState.restartsTimestamps.length + '/' + supervisorState.maxRestarts + ')...');
+    ensureDatabaseConnection();
+    return;
+  }
+  console.error('[Supervisor] Превышен лимит рестартов, аварийное завершение');
   setTimeout(() => process.exit(1), 500);
 });
 
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('❌ [UNHANDLED REJECTION] Необработанное отклонение промиса:', reason);
+process.on('unhandledRejection', (reason: any, promise) => {
+  console.error('[UNHANDLED REJECTION] Необработанное отклонение промиса:', reason);
   console.error('[UNHANDLED REJECTION] Promise:', promise);
-  // Don't exit — log and continue, some rejections are non-fatal (e.g. DB retry)
+  const msg = String((reason && reason.message) || reason || '');
+  if (/postgres|database|pg_|connection|ECONN|ETIMEDOUT/i.test(msg)) {
+    console.warn('[Supervisor] DB-related rejection, запуск восстановления БД');
+    ensureDatabaseConnection();
+  }
 });
 
-// Запуск
 if (require.main === module) {
   startServer();
 }

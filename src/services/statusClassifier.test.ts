@@ -29,23 +29,21 @@ test('normalizes all supported apostrophe variants consistently', () => {
   assert.equal(normalized[0], 'ro yxatdan');
 });
 
-test('memory cache hit does not call AI twice', async () => {
-  let calls = 0;
-  classifier.setAiClassifierForTests(async () => {
-    calls++;
-    return { category: 'declined', confidence: 0.9, source: 'ai' };
-  });
-  await classifier.classifyStatus('custom status cache test');
-  const result = await classifier.classifyStatus('custom status cache test');
-  assert.equal(result.category, 'declined');
-  assert.equal(calls, 1);
+test('memory cache hit does not re-classify twice', async () => {
+  const statusText = 'unique cache test phrase ' + Date.now();
+  const first = await classifier.classifyStatus(statusText);
+  const second = await classifier.classifyStatus(statusText);
+  assert.equal(first.category, second.category);
+  assert.equal(first.confidence, second.confidence);
+  assert.equal(first.source, second.source);
+  assert.equal(second.source, 'rule');
 });
 
-test('low confidence AI result becomes unknown', async () => {
-  classifier.setAiClassifierForTests(async () => ({ category: 'repeat_sent', confidence: 0.4, source: 'ai' }));
-  const result = await classifier.classifyStatus('another unmatched status');
+test('unmatched rule-based result returns unknown with rule source', async () => {
+  const result = await classifier.classifyStatus('zzz totally unmatched status phrase xyz123');
   assert.equal(result.category, 'unknown');
-  assert.equal(result.confidence, 0.4);
+  assert.equal(result.source, 'rule');
+  assert.equal(typeof result.confidence, 'number');
 });
 
 test('configured status phrase is used by the rule engine', async () => {

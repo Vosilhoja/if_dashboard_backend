@@ -13,8 +13,7 @@ const inMemoryStore = {
     { id: 5, name: 'viewer', description: 'Наблюдатель: только чтение сводных отчетов', permissions: ['view_dashboard'] }
   ],
   auditLogs: [],
-  tasks: [],
-  aiChatMessages: new Map()
+  tasks: []
 };
 
 let pool = null;
@@ -95,6 +94,11 @@ async function initDatabase() {
         title VARCHAR(500) NOT NULL,
         notes TEXT,
         status VARCHAR(20) NOT NULL DEFAULT 'open' CHECK (status IN ('open','in_progress','done','cancelled')),
+        priority VARCHAR(10) NOT NULL DEFAULT 'medium' CHECK (priority IN ('low','medium','high','urgent')),
+        assignee_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        category VARCHAR(100),
+        tags TEXT[] DEFAULT '{}',
+        comments JSONB DEFAULT '[]'::jsonb,
         due_at TIMESTAMP WITH TIME ZONE,
         linked_phone VARCHAR(50),
         linked_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -104,17 +108,15 @@ async function initDatabase() {
       );
       CREATE INDEX IF NOT EXISTS idx_tasks_due_status ON tasks (due_at, status);
       CREATE INDEX IF NOT EXISTS idx_tasks_linked_user ON tasks (linked_user_id);
+      CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks (priority);
+      CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks (assignee_id);
+      CREATE INDEX IF NOT EXISTS idx_tasks_category ON tasks (category);
 
-      CREATE TABLE IF NOT EXISTS ai_chat_messages (
-        id BIGSERIAL PRIMARY KEY,
-        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        role VARCHAR(20) NOT NULL CHECK (role IN ('user', 'assistant')),
-        content TEXT NOT NULL,
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_ai_chat_messages_user_created
-        ON ai_chat_messages (user_id, created_at, id);
+      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS priority VARCHAR(10) DEFAULT 'medium' CHECK (priority IN ('low','medium','high','urgent'));
+      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assignee_id INTEGER REFERENCES users(id) ON DELETE SET NULL;
+      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS category VARCHAR(100);
+      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS tags TEXT[] DEFAULT '{}';
+      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS comments JSONB DEFAULT '[]'::jsonb;
 
       CREATE TABLE IF NOT EXISTS status_classifications (
         id BIGSERIAL PRIMARY KEY,
