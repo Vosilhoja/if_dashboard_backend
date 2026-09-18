@@ -1304,6 +1304,39 @@ async function getSheetPaginated(
       row['ОТ поддержки?'] = phone && matchedPhonesSupport.has(phone) ? 'Да' : 'Нет';
     }
   }
+
+  // Фильтрация по выбранным датам (startDate / endDate), если указаны даты
+  let baseRows = allRows;
+  if (startDate || endDate) {
+    if (type === 'main') {
+      baseRows = allRows.filter((row) => {
+        const d = parseSheetDate(getMainRegistrationDate(row));
+        return isDateInRange(d, startDate, endDate);
+      });
+    } else if (type === 'numbers' || type === 'numbers_repeat') {
+      baseRows = allRows.filter((row) => {
+        const d = parseSheetDate(getCallDate(row));
+        return isDateInRange(d, startDate, endDate);
+      });
+    } else if (type === 'not_completed') {
+      baseRows = allRows.filter((row) => {
+        const dateStr = getRowValue(
+          row,
+          ['Дата создания', 'Start date', 'Дата', 'Creation date'],
+          (key) => /(датасоздания|startdate|дата|creationdate)/.test(key)
+        );
+        const d = parseSheetDate(dateStr);
+        return isDateInRange(d, startDate, endDate);
+      });
+    } else {
+      baseRows = allRows.filter((row) => {
+        const dateStr = getRowValue(row, ['Дата', 'Date', 'Дата создания'], (key) => /(дата|date)/.test(key));
+        const d = parseSheetDate(dateStr);
+        return isDateInRange(d, startDate, endDate);
+      });
+    }
+  }
+
   const pageData = await fetchSheetPage(type, page, pageSize);
   let headers = [];
   if (pageData.headers.length > 0) {
@@ -1315,7 +1348,7 @@ async function getSheetPaginated(
     headers = [...headers, 'ОТ поддержки?'];
   }
 
-  let filteredRows = allRows;
+  let filteredRows = baseRows;
   if (search) {
     const searchNorm = normalizePhone(search);
     const searchLower = search.toLowerCase();
