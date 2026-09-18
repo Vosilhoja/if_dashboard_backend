@@ -18,6 +18,7 @@ const statusRoutes = require('./routes/statusRoutes');
 const statusAdminRoutes = require('./routes/statusAdminRoutes');
 const taskRoutes = require('./routes/taskRoutes');
 const systemRoutes = require('./routes/systemRoutes');
+const settingsRoutes = require('./routes/settingsRoutes');
 
 const { initTelegramBot } = require('./bot/telegramBot');
 const {
@@ -185,6 +186,7 @@ app.use('/api/stats', statsRoutes);
 app.use('/api/status', statusRoutes);
 app.use('/api/tasks', taskRoutes);
 app.use('/api/system', systemRoutes);
+app.use('/api/settings', settingsRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
