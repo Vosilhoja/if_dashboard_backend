@@ -1227,10 +1227,9 @@ async function getSheetPaginated(
   if (type === 'not_completed' || type === 'main') {
     const numbersRows = cache['sheet_numbers']?.data || [];
 
-    // Build a set of phones from the numbers sheet filtered by the selected date range.
-    // This mirrors the logic used in calculateDashboardMetrics for "От поддержки":
-    // a main_base row is counted as "from support" only if its phone appears in a
-    // call record whose date falls within the requested period.
+    // === ТОЧНАЯ КОПИЯ логики calculateDashboardMetrics для метрики "От поддержки" ===
+
+    // 1. Звонки за выбранный период
     const numbersInPeriod = (startDate || endDate)
       ? numbersRows.filter((row) => {
           const d = parseSheetDate(getCallDate(row));
@@ -1238,19 +1237,71 @@ async function getSheetPaginated(
         })
       : numbersRows;
 
-    // Build set of all phones in main_base (unfiltered) — same as mainPhones in metrics
-    const mainPhones = new Set(allRows.map((row) => normalizePhone(getPhone(row))).filter(Boolean));
+    // 2. Все телефоны из main_base (полная база)
+    const mainPhones = new Set();
+    const mainRegistrationsByPhone = new Map();
+    for (const row of allRows) {
+      const phone = normalizePhoneWithDiagnostics(getPhone(row)).normalized;
+      if (!phone) continue;
+      mainPhones.add(phone);
+      const dateStr = getMainRegistrationDate(row);
+      const registrationDate = parseSheetDate(dateStr);
+      const sourceClass = classifyRegistrationSource(getMainRegistrationSource(row));
+      if (!registrationDate) continue;
+      const registrations = mainRegistrationsByPhone.get(phone) || [];
+      registrations.push({ date: registrationDate, fromBot: sourceClass === true });
+      mainRegistrationsByPhone.set(phone, registrations);
+    }
 
-    // Phones called within the period
-    const calledPhonesInPeriod = new Set(
-      numbersInPeriod.map((row) => normalizePhone(getPhone(row))).filter(Boolean)
+    // 3. Уникальные телефоны из обзвона за период
+    const calledUniquePhones = new Set(
+      numbersInPeriod
+        .map((row) => normalizePhoneWithDiagnostics(getPhone(row)).normalized)
+        .filter(Boolean)
     );
 
+    // 4. Телефоны уже зарегистрированных через бот ("bot bor" в статусе)
+    const botRegisteredPhones = new Set(
+      numbersInPeriod
+        .filter((row) => /\bbot\s+bor\b/i.test(String(getCallStatus(row) || '').trim()))
+        .map((row) => normalizePhoneWithDiagnostics(getPhone(row)).normalized)
+        .filter(Boolean)
+    );
+
+    // 5. Телефоны зарегистрировавшихся после повторного звонка
+    const periodEnd = parseSheetDate(endDate);
+    const matchedRepeatPhones = new Set();
+    for (const row of numbersInPeriod) {
+      const comment = getCallStatus(row);
+      if (!isRepeatSentStatus(comment, STATUS_CONFIG.repeatSent)) continue;
+      if (isAlreadyRegisteredStatus(comment, STATUS_CONFIG.alreadyRegistered)) continue;
+      const p = normalizePhoneWithDiagnostics(getPhone(row)).normalized;
+      const callDate = parseSheetDate(getCallDate(row));
+      const registrations = p ? mainRegistrationsByPhone.get(p) || [] : [];
+      const registration = registrations
+        .filter((item) =>
+          item.date >= callDate &&
+          (!periodEnd || item.date <= periodEnd) &&
+          !item.fromBot
+        )
+        .sort((a, b) => a.date - b.date)[0];
+      if (p && callDate && registration) {
+        matchedRepeatPhones.add(p);
+      }
+    }
+
+    // 6. Финальное множество "от поддержки" — исключаем повторных и bot bor
+    const supportExcludedPhones = new Set([...matchedRepeatPhones, ...botRegisteredPhones]);
+    const matchedPhonesSupport = new Set(
+      [...calledUniquePhones].filter(
+        (phone) => mainPhones.has(phone) && !supportExcludedPhones.has(phone)
+      )
+    );
+
+    // 7. Помечаем строки main_base
     for (const row of allRows) {
-      const phone = normalizePhone(getPhone(row));
-      // A row is "from support" when the phone was called in the selected period
-      // AND exists in main_base (same cross-check as the dashboard metric)
-      row['ОТ поддержки?'] = phone && calledPhonesInPeriod.has(phone) && mainPhones.has(phone) ? 'Да' : 'Нет';
+      const phone = normalizePhoneWithDiagnostics(getPhone(row)).normalized;
+      row['ОТ поддержки?'] = phone && matchedPhonesSupport.has(phone) ? 'Да' : 'Нет';
     }
   }
   const pageData = await fetchSheetPage(type, page, pageSize);
