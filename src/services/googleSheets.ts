@@ -33,6 +33,15 @@ const DASHBOARD_METRICS_CACHE_TTL_MS =
 let dashboardMetricsActive = 0;
 const dashboardMetricsWaiters = [];
 let syncInFlight = null;
+const syncProgress = {
+  active: false,
+  current: 0,
+  total: 5,
+  label: 'Готово',
+  error: null,
+  startedAt: null,
+  completedAt: null,
+};
 // A metrics calculation keeps several large sheet snapshots alive while it
 // builds phone/date indexes. Running two calculations concurrently can exceed
 // Railway's memory limit with the production-sized sheets.
@@ -150,6 +159,98 @@ function classifyRegistrationSource(source) {
   const value = String(source ?? '').trim().toLowerCase();
   if (!value) return null;
   return /(bot|бот|telegram|телеграм|o'?zi|o`zi|сам(остоятельно)?|сайт(а|ом)?)/i.test(value);
+}
+
+/**
+ * Keeps the three registration outcomes mutually exclusive:
+ * - support: a call was made and a non-bot registration happened in the
+ *   selected period after that call;
+ * - repeat: a repeat call was made and the registration happened after it;
+ * - already registered: the operator explicitly marked the call as such.
+ *
+ * This is shared by dashboard metrics and raw tables so both surfaces show
+ * the same people for the same date range.
+ */
+function buildRegistrationClassification(mainRows, numbersRows, startDate = '', endDate = '') {
+  const numbersInPeriod = (startDate || endDate)
+    ? numbersRows.filter((row) => isDateInRange(parseSheetDate(getCallDate(row)), startDate, endDate))
+    : numbersRows;
+  const periodEnd = parseSheetDate(endDate);
+  const registrationsByPhone = new Map();
+  const mainPhones = new Set();
+
+  for (const row of mainRows) {
+    const phone = normalizePhoneWithDiagnostics(getPhone(row)).normalized;
+    if (!phone) continue;
+    mainPhones.add(phone);
+    const registrationDate = parseSheetDate(getMainRegistrationDate(row));
+    if (!registrationDate) continue;
+    const sourceClass = classifyRegistrationSource(getMainRegistrationSource(row));
+    const registrations = registrationsByPhone.get(phone) || [];
+    registrations.push({
+      date: registrationDate,
+      fromBot: sourceClass === true,
+    });
+    registrationsByPhone.set(phone, registrations);
+  }
+
+  const alreadyRegisteredPhones = new Set();
+  const repeatContactCount = numbersInPeriod.reduce((count, row) => {
+    const comment = getCallStatus(row);
+    if (isAlreadyRegisteredStatus(comment, STATUS_CONFIG.alreadyRegistered)) {
+      const phone = normalizePhoneWithDiagnostics(getPhone(row)).normalized;
+      if (phone) alreadyRegisteredPhones.add(phone);
+    }
+    return count + (isRepeatSentStatus(comment, STATUS_CONFIG.repeatSent) ? 1 : 0);
+  }, 0);
+
+  const repeatPhones = new Set();
+  for (const row of numbersInPeriod) {
+    const comment = getCallStatus(row);
+    if (!isRepeatSentStatus(comment, STATUS_CONFIG.repeatSent) ||
+        isAlreadyRegisteredStatus(comment, STATUS_CONFIG.alreadyRegistered)) continue;
+    const phone = normalizePhoneWithDiagnostics(getPhone(row)).normalized;
+    const callDate = parseSheetDate(getCallDate(row));
+    const registration = (registrationsByPhone.get(phone) || [])
+      .filter((item) =>
+        !item.fromBot &&
+        item.date >= (callDate || item.date) &&
+        (!startDate || isDateInRange(item.date, startDate, endDate)) &&
+        (!periodEnd || item.date <= periodEnd)
+      )
+      .sort((a, b) => a.date - b.date)[0];
+    if (phone && registration) repeatPhones.add(phone);
+  }
+
+  const supportPhones = new Set();
+  const calledPhones = new Set();
+  for (const row of numbersInPeriod) {
+    const phone = normalizePhoneWithDiagnostics(getPhone(row)).normalized;
+    if (!phone) continue;
+    calledPhones.add(phone);
+    const comment = getCallStatus(row);
+    if (isAlreadyRegisteredStatus(comment, STATUS_CONFIG.alreadyRegistered) || repeatPhones.has(phone)) continue;
+    const callDate = parseSheetDate(getCallDate(row));
+    const registration = (registrationsByPhone.get(phone) || [])
+      .filter((item) =>
+        !item.fromBot &&
+        item.date >= (callDate || item.date) &&
+        (!startDate || isDateInRange(item.date, startDate, endDate)) &&
+        (!periodEnd || item.date <= periodEnd)
+      )
+      .sort((a, b) => a.date - b.date)[0];
+    if (registration) supportPhones.add(phone);
+  }
+
+  return {
+    numbersInPeriod,
+    mainPhones,
+    supportPhones,
+    repeatPhones,
+    alreadyRegisteredPhones,
+    repeatContactCount,
+    calledPhones,
+  };
 }
 
 function sleep(ms) {
@@ -322,22 +423,54 @@ async function syncSheet(type) {
 
 async function synchronizeSheets() {
   if (syncInFlight) return syncInFlight;
+  const sheetTypes = ['main', 'numbers', 'eskiz', 'not_completed', 'survey_attempts'];
+  syncProgress.active = true;
+  syncProgress.current = 0;
+  syncProgress.total = sheetTypes.length;
+  syncProgress.label = 'Подготовка';
+  syncProgress.error = null;
+  syncProgress.startedAt = new Date().toISOString();
+  syncProgress.completedAt = null;
+
   syncInFlight = Promise.all(
-    ['main', 'numbers', 'eskiz', 'not_completed', 'survey_attempts'].map(async (type) => {
+    sheetTypes.map(async (type) => {
       try {
-        return await syncSheet(type);
+        const result = await syncSheet(type);
+        syncProgress.current += 1;
+        syncProgress.label = type;
+        return result;
       } catch (error) {
         console.error(`[Sheets sync] Ошибка синхронизации ${type}:`, error.message || error);
+        syncProgress.current += 1;
+        syncProgress.label = type;
+        syncProgress.error = syncProgress.error || error.message || `Ошибка синхронизации ${type}`;
         return { type, added: 0, error: error.message || `Ошибка синхронизации ${type}` };
       }
     }),
   ).then((results) => {
     dashboardMetricsCache.clear();
+    syncProgress.active = false;
+    syncProgress.current = syncProgress.total;
+    syncProgress.label = syncProgress.error ? 'Завершено с ошибками' : 'Завершено';
+    syncProgress.completedAt = new Date().toISOString();
     return { synchronizedAt: new Date().toISOString(), results };
+  }).catch((error) => {
+    syncProgress.active = false;
+    syncProgress.error = error.message || 'Ошибка синхронизации';
+    syncProgress.label = 'Ошибка';
+    syncProgress.completedAt = new Date().toISOString();
+    throw error;
   }).finally(() => {
     syncInFlight = null;
   });
   return syncInFlight;
+}
+
+function getSyncStatus() {
+  return {
+    ...syncProgress,
+    current: Math.min(syncProgress.current, syncProgress.total),
+  };
 }
 
 function getEffectiveSheetRowCount(rawCount, loadedRowsLength = 0) {
@@ -864,56 +997,14 @@ async function calculateDashboardMetrics(query: any = {}) {
     registeredMainVal = registeredPeopleInPeriod.size;
   }
 
-  // Метрика 4: пользователи после повторного звонка.
-  let repeatStatusesFoundInPeriod = 0;
-  const matchedRepeatPhones = new Set();
-  const periodEnd = parseSheetDate(endDate);
-  if (!numbersError && !mainError) {
-    for (const row of numbersInPeriod) {
-      const comment = getCallStatus(row);
-      if (!isRepeatSentStatus(comment, STATUS_CONFIG.repeatSent)) continue;
-      if (isAlreadyRegisteredStatus(comment, STATUS_CONFIG.alreadyRegistered)) continue;
-
-      repeatStatusesFoundInPeriod++;
-      const p = normalizePhoneWithDiagnostics(getPhone(row)).normalized;
-      const callDate = parseSheetDate(getCallDate(row));
-      const registrations = p ? mainRegistrationsByPhone.get(p) || [] : [];
-      const registration = registrations
-        .filter((item) =>
-          item.date >= callDate &&
-          (!periodEnd || item.date <= periodEnd) &&
-          !item.fromBot
-        )
-        .sort((a, b) => a.date - b.date)[0];
-      if (p && callDate && registration) {
-        matchedRepeatPhones.add(p);
-      }
-    }
-  }
-
-  // Метрика 5: от поддержки.
-  // Категории взаимоисключающие: пользователи после повторного звонка
-  // и явно уже зарегистрированные через бот считаются только в своих карточках.
-  const calledUniquePhones = new Set(
-    numbersInPeriod
-      .map((row) => normalizePhoneWithDiagnostics(getPhone(row)).normalized)
-      .filter(Boolean)
-  );
-  const botRegisteredPhones = new Set(
-    numbersInPeriod
-      .filter((row) => /\bbot\s+bor\b/i.test(String(getCallStatus(row) || '').trim()))
-      .map((row) => normalizePhoneWithDiagnostics(getPhone(row)).normalized)
-      .filter(Boolean)
-  );
-  const supportExcludedPhones = new Set([
-    ...matchedRepeatPhones,
-    ...botRegisteredPhones,
-  ]);
-  const matchedPhonesSupport = new Set(
-    [...calledUniquePhones].filter(
-      (phone) => mainPhones.has(phone) && !supportExcludedPhones.has(phone)
-    )
-  );
+  const registrationClassification = (!numbersError && !mainError)
+    ? buildRegistrationClassification(mainRows, numbersRows, startDate, endDate)
+    : null;
+  const matchedRepeatPhones = registrationClassification?.repeatPhones || new Set();
+  const matchedPhonesSupport = registrationClassification?.supportPhones || new Set();
+  const calledUniquePhones = registrationClassification?.calledPhones || new Set();
+  const alreadyRegisteredPhones = registrationClassification?.alreadyRegisteredPhones || new Set();
+  const repeatStatusesFoundInPeriod = registrationClassification?.repeatContactCount || 0;
 
   // Метрика 9: Не завершили регистрацию
   const notCompletedPeopleInPeriod = new Set();
@@ -1054,7 +1145,7 @@ async function calculateDashboardMetrics(query: any = {}) {
       diagnostics: (numbersError || mainError) ? undefined : {
         unknownSourceCount: mainHasUnknownSourceRegistration.size,
         excludedRepeatCount: matchedRepeatPhones.size,
-        excludedBotRegisteredCount: botRegisteredPhones.size,
+        excludedBotRegisteredCount: alreadyRegisteredPhones.size,
       },
       error: (numbersError || mainError) || undefined,
     },
@@ -1092,7 +1183,7 @@ async function calculateDashboardMetrics(query: any = {}) {
       error: numbersError || undefined,
     },
     alreadyRegisteredCount: {
-      value: numbersError ? '—' : alreadyRegisteredVal,
+      value: numbersError ? '—' : Math.max(alreadyRegisteredVal, alreadyRegisteredPhones.size),
       subtext: numbersError ? undefined : `Уже зарегистрированы через бот (bot bor и др.)`,
       error: numbersError || undefined,
     },
@@ -1219,86 +1310,25 @@ async function getSheetPaginated(
   sortDirection = 'asc',
   filterColumn = '',
   filterValue = '',
+  filterValues = [],
+  filterOptionsColumn = '',
   startDate = '',
   endDate = '',
 ) {
+  const safePage = Number.isFinite(Number(page)) && Number(page) > 0
+    ? Math.floor(Number(page))
+    : 1;
+  const safePageSize = Number.isFinite(Number(pageSize)) && Number(pageSize) > 0
+    ? Math.min(Math.floor(Number(pageSize)), 100000)
+    : 25;
   const cacheKey = `sheet_${type}`;
   const allRows = cache[cacheKey]?.data || [];
   if (type === 'not_completed' || type === 'main') {
     const numbersRows = cache['sheet_numbers']?.data || [];
+    const classification = buildRegistrationClassification(allRows, numbersRows, startDate, endDate);
+    const matchedPhonesSupport = classification.supportPhones;
 
-    // === ТОЧНАЯ КОПИЯ логики calculateDashboardMetrics для метрики "От поддержки" ===
-
-    // 1. Звонки за выбранный период
-    const numbersInPeriod = (startDate || endDate)
-      ? numbersRows.filter((row) => {
-          const d = parseSheetDate(getCallDate(row));
-          return isDateInRange(d, startDate, endDate);
-        })
-      : numbersRows;
-
-    // 2. Все телефоны из main_base (полная база)
-    const mainPhones = new Set();
-    const mainRegistrationsByPhone = new Map();
-    for (const row of allRows) {
-      const phone = normalizePhoneWithDiagnostics(getPhone(row)).normalized;
-      if (!phone) continue;
-      mainPhones.add(phone);
-      const dateStr = getMainRegistrationDate(row);
-      const registrationDate = parseSheetDate(dateStr);
-      const sourceClass = classifyRegistrationSource(getMainRegistrationSource(row));
-      if (!registrationDate) continue;
-      const registrations = mainRegistrationsByPhone.get(phone) || [];
-      registrations.push({ date: registrationDate, fromBot: sourceClass === true });
-      mainRegistrationsByPhone.set(phone, registrations);
-    }
-
-    // 3. Уникальные телефоны из обзвона за период
-    const calledUniquePhones = new Set(
-      numbersInPeriod
-        .map((row) => normalizePhoneWithDiagnostics(getPhone(row)).normalized)
-        .filter(Boolean)
-    );
-
-    // 4. Телефоны уже зарегистрированных через бот ("bot bor" в статусе)
-    const botRegisteredPhones = new Set(
-      numbersInPeriod
-        .filter((row) => /\bbot\s+bor\b/i.test(String(getCallStatus(row) || '').trim()))
-        .map((row) => normalizePhoneWithDiagnostics(getPhone(row)).normalized)
-        .filter(Boolean)
-    );
-
-    // 5. Телефоны зарегистрировавшихся после повторного звонка
-    const periodEnd = parseSheetDate(endDate);
-    const matchedRepeatPhones = new Set();
-    for (const row of numbersInPeriod) {
-      const comment = getCallStatus(row);
-      if (!isRepeatSentStatus(comment, STATUS_CONFIG.repeatSent)) continue;
-      if (isAlreadyRegisteredStatus(comment, STATUS_CONFIG.alreadyRegistered)) continue;
-      const p = normalizePhoneWithDiagnostics(getPhone(row)).normalized;
-      const callDate = parseSheetDate(getCallDate(row));
-      const registrations = p ? mainRegistrationsByPhone.get(p) || [] : [];
-      const registration = registrations
-        .filter((item) =>
-          item.date >= callDate &&
-          (!periodEnd || item.date <= periodEnd) &&
-          !item.fromBot
-        )
-        .sort((a, b) => a.date - b.date)[0];
-      if (p && callDate && registration) {
-        matchedRepeatPhones.add(p);
-      }
-    }
-
-    // 6. Финальное множество "от поддержки" — исключаем повторных и bot bor
-    const supportExcludedPhones = new Set([...matchedRepeatPhones, ...botRegisteredPhones]);
-    const matchedPhonesSupport = new Set(
-      [...calledUniquePhones].filter(
-        (phone) => mainPhones.has(phone) && !supportExcludedPhones.has(phone)
-      )
-    );
-
-    // 7. Помечаем строки main_base
+    // Mark main_base rows using the exact same classification as the KPI.
     for (const row of allRows) {
       const phone = normalizePhoneWithDiagnostics(getPhone(row)).normalized;
       row['ОТ поддержки?'] = phone && matchedPhonesSupport.has(phone) ? 'Да' : 'Нет';
@@ -1337,7 +1367,7 @@ async function getSheetPaginated(
     }
   }
 
-  const pageData = await fetchSheetPage(type, page, pageSize);
+  const pageData = await fetchSheetPage(type, safePage, safePageSize);
   let headers = [];
   if (pageData.headers.length > 0) {
     headers = pageData.headers;
@@ -1352,7 +1382,7 @@ async function getSheetPaginated(
   if (search) {
     const searchNorm = normalizePhone(search);
     const searchLower = search.toLowerCase();
-    filteredRows = allRows.filter((row) => {
+    filteredRows = filteredRows.filter((row) => {
       const phone = getPhone(row);
       if (phone) {
         const normPhone = normalizePhone(phone);
@@ -1363,7 +1393,10 @@ async function getSheetPaginated(
       );
     });
   }
-  if (filterColumn && filterValue) {
+  if (filterColumn && filterValues.length > 0) {
+    const selected = new Set(filterValues.map((value) => String(value)));
+    filteredRows = filteredRows.filter((row) => selected.has(String(row[filterColumn] ?? '')));
+  } else if (filterColumn && filterValue) {
     const filterLower = filterValue.toLowerCase();
     filteredRows = filteredRows.filter((row) =>
       String(row[filterColumn] ?? '').toLowerCase().includes(filterLower)
@@ -1384,18 +1417,21 @@ async function getSheetPaginated(
   }
 
   const total = filteredRows.length;
-  const totalPages = Math.ceil(total / pageSize);
-  const offset = (page - 1) * pageSize;
-  const paginatedRows = filteredRows.slice(offset, offset + pageSize);
+  const totalPages = Math.ceil(total / safePageSize);
+  const offset = (safePage - 1) * safePageSize;
+  const paginatedRows = filteredRows.slice(offset, offset + safePageSize);
 
   return {
     type,
-    page,
-    pageSize,
+    page: safePage,
+    pageSize: safePageSize,
     total,
     totalPages,
     headers,
     rows: paginatedRows,
+    filterOptions: (filterColumn || filterOptionsColumn)
+      ? Array.from(new Set(baseRows.map((row) => String(row[filterColumn || filterOptionsColumn] ?? ''))))
+      : undefined,
     cachedAt: new Date().toISOString(),
   };
 }
@@ -1415,5 +1451,6 @@ module.exports = {
   getSheetSummary,
   reloadSheetFully,
   checkSheetConnection,
-  classifyRegistrationSource
+  classifyRegistrationSource,
+  getSyncStatus,
 };

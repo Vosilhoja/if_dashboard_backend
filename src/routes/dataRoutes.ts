@@ -6,7 +6,8 @@ const { authenticateToken, authorizeRoles } = require('../middleware/auth');
 const {
   calculateDashboardMetrics,
   getPeriodDetails,
-  getSheetPaginated
+  getSheetPaginated,
+  getSyncStatus,
 } = require('../services/googleSheets');
 const { getAnalyticsData } = require('../services/analyticsService');
 const { synchronizeSheets } = require('../services/googleSheets');
@@ -17,6 +18,10 @@ router.post('/sync', authenticateToken, dashboardRefreshLimiter, async (req, res
   } catch (error) {
     next(error);
   }
+});
+
+router.get('/sync/status', authenticateToken, dashboardLimiter, (req, res) => {
+  return res.status(200).json(getSyncStatus());
 });
 
 router.post('/sheets/:type/full-reload', authenticateToken, dashboardRefreshLimiter, async (req, res, next) => {
@@ -176,9 +181,13 @@ router.get('/sheets/:type', authenticateToken, dashboardLimiter, dashboardRefres
       );
       return res.status(200).json(summary);
     }
-    const page = Math.max(1, parseInt(req.query.page || '1', 10));
+    const parsedPage = Number.parseInt(String(req.query.page || '1'), 10);
+    const page = Number.isFinite(parsedPage) && parsedPage > 0 ? parsedPage : 1;
     const isExport = req.query.export === 'true';
-    const requestedPageSize = Math.max(10, parseInt(req.query.pageSize || '25', 10));
+    const parsedPageSize = Number.parseInt(String(req.query.pageSize || '25'), 10);
+    const requestedPageSize = Number.isFinite(parsedPageSize) && parsedPageSize >= 10
+      ? parsedPageSize
+      : 25;
     const pageSize = Math.min(isExport ? 100000 : 500, requestedPageSize);
     const search = (req.query.search || '').trim();
     const refresh = req.query.refresh === 'true' || req.query.fresh === 'true';
@@ -186,6 +195,10 @@ router.get('/sheets/:type', authenticateToken, dashboardLimiter, dashboardRefres
     const sortDirection = req.query.sortDirection === 'desc' ? 'desc' : 'asc';
     const filterColumn = String(req.query.filterColumn || '');
     const filterValue = String(req.query.filterValue || '');
+    const filterOptionsColumn = String(req.query.filterOptionsColumn || '');
+    const filterValues = String(req.query.filterValues || '')
+      .split('|')
+      .filter(Boolean);
     const startDate = String(req.query.startDate || '');
     const endDate = String(req.query.endDate || '');
 
@@ -199,6 +212,8 @@ router.get('/sheets/:type', authenticateToken, dashboardLimiter, dashboardRefres
       sortDirection,
       filterColumn,
       filterValue,
+      filterValues,
+      filterOptionsColumn,
       startDate,
       endDate,
     );
