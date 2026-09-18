@@ -59,31 +59,22 @@ async function getLiveSummary() {
   }
 }
 
-function initTelegramBot() {
-  if (!config.telegram.botToken) {
-    console.warn('⚠️ [Telegram Bot] Токен бота не указан в .env. Бот не запущен.');
-    return null;
-  }
-  if (config.telegram.allowedIds.length === 0) {
-    console.warn('⚠️ [Telegram Bot] TELEGRAM_ALLOWED_IDS/TELEGRAM_ADMIN_IDS не настроен. Бот отключен.');
-    return null;
-  }
+/**
+ * Регистрирует все команды и хендлеры на переданном экземпляре бота.
+ * @param {Telegraf} bot - Экземпляр Telegraf бота
+ * @param {{id: number, token: string, userId: string, allowedIds: string[]}} botConfig - Конфиг конкретного бота
+ */
+function registerBotHandlers(bot, botConfig) {
+  const botLabel = `[Bot #${botConfig.id}]`;
 
-  const bot = new Telegraf(config.telegram.botToken);
-
-  // Keep the bot closed to arbitrary Telegram users. IDs are supplied only
-  // through environment configuration and are never derived from messages.
   bot.use((ctx, next) => {
     const tgId = String(ctx.from?.id || '');
-    if (!config.telegram.allowedIds.includes(tgId)) {
+    if (!botConfig.allowedIds.includes(tgId)) {
       return ctx.reply('🔒 Доступ к этому боту ограничен.');
     }
     return next();
   });
 
-  // =========================================
-  // /start — Приветствие и проверка привязки
-  // =========================================
   bot.start(async (ctx) => {
     const tgUser = ctx.from;
     const tgId = String(tgUser.id);
@@ -117,9 +108,6 @@ function initTelegramBot() {
     );
   });
 
-  // =========================================
-  // /link <one-time-code> — Привязка аккаунта без передачи пароля в Telegram
-  // =========================================
   bot.command('link', async (ctx) => {
     try {
       const parts = ctx.message.text.trim().split(/\s+/);
@@ -141,7 +129,7 @@ function initTelegramBot() {
       try {
         await ctx.deleteMessage(ctx.message.message_id);
       } catch (deleteError) {
-        console.warn('[Bot /link] Не удалось удалить сообщение с кодом:', deleteError.message);
+        console.warn(`${botLabel} [/link] Не удалось удалить сообщение с кодом:`, deleteError.message);
       }
 
       return ctx.reply(
@@ -157,14 +145,11 @@ function initTelegramBot() {
         }
       );
     } catch (err) {
-      console.error('[Bot /link error]:', err);
+      console.error(`${botLabel} [/link error]:`, err);
       return ctx.reply('❌ Произошла ошибка при связывании аккаунта.');
     }
   });
 
-  // =========================================
-  // /stats — Быстрый отчет с реальными данными
-  // =========================================
   bot.command('stats', async (ctx) => {
     const tgId = String(ctx.from.id);
     const user = await UserModel.findByTelegramId(tgId);
@@ -199,6 +184,7 @@ function initTelegramBot() {
   async function linkedTelegramUser(ctx) {
     return UserModel.findByTelegramId(String(ctx.from?.id || ''));
   }
+
   bot.command('tasks', async (ctx) => {
     const user = await linkedTelegramUser(ctx);
     if (!user) return ctx.reply('🔒 Сначала привяжите аккаунт через `/link`.', { parse_mode: 'Markdown' });
@@ -206,6 +192,7 @@ function initTelegramBot() {
     const items = await taskService.listTasks({ userId: user.id, period });
     return ctx.reply(items.length ? items.map((task) => `#${task.id} [${task.status}] ${task.title}${task.dueAt ? ` — ${new Date(task.dueAt).toLocaleString('ru-RU')}` : ''}`).join('\n') : '✅ Задач нет.');
   });
+
   bot.command('task', async (ctx) => {
     const user = await linkedTelegramUser(ctx);
     if (!user) return ctx.reply('🔒 Сначала привяжите аккаунт через `/link`.', { parse_mode: 'Markdown' });
@@ -215,6 +202,7 @@ function initTelegramBot() {
     const task = await taskService.createTask({ title: match[1].trim(), dueAt: match[2] ? new Date(match[2].replace(' ', 'T')).toISOString() : null, createdBy: user.id, linkedUserId: user.id });
     return ctx.reply(`✅ Создана задача #${task.id}: ${task.title}`);
   });
+
   bot.command('done', async (ctx) => {
     const user = await linkedTelegramUser(ctx);
     if (!user) return ctx.reply('🔒 Сначала привяжите аккаунт через `/link`.', { parse_mode: 'Markdown' });
@@ -223,8 +211,7 @@ function initTelegramBot() {
     const task = await taskService.updateTask(id, { status: 'done' });
     return ctx.reply(task ? `✅ Задача #${id} отмечена выполненной.` : '❌ Задача не найдена.');
   });
-  // Also accept a compact text form from clients that do not send Telegram
-  // command entities (for example, integrations forwarding plain text).
+
   bot.on('text', async (ctx, next) => {
     const text = String(ctx.message?.text || '').trim();
     if (!/^task:\s+/i.test(text)) return next();
@@ -234,7 +221,6 @@ function initTelegramBot() {
     return ctx.reply(`✅ Создана задача #${task.id}: ${task.title}`);
   });
 
-  // /find <phone-or-id> [table] — return matching rows without dumping a table.
   bot.command('find', async (ctx) => {
     const parts = ctx.message.text.trim().split(/\s+/).slice(1);
     const query = parts.shift() || '';
@@ -269,14 +255,11 @@ function initTelegramBot() {
       });
       return ctx.reply(`🔎 Найдено: ${result.total}\n\n${messages.join('\n\n')}`);
     } catch (error) {
-      console.error('[Bot /find error]:', error);
+      console.error(`${botLabel} [/find error]:`, error);
       return ctx.reply('❌ Не удалось выполнить поиск. Попробуйте позже.');
     }
   });
 
-  // =========================================
-  // Кнопка: 📊 Сводка дашборда
-  // =========================================
   bot.hears('📊 Сводка дашборда', async (ctx) => {
     const tgId = String(ctx.from.id);
     const user = await UserModel.findByTelegramId(tgId);
@@ -307,9 +290,6 @@ function initTelegramBot() {
     );
   });
 
-  // =========================================
-  // Кнопка: 📞 Статистика обзвонов
-  // =========================================
   bot.hears('📞 Статистика обзвонов', async (ctx) => {
     const tgId = String(ctx.from.id);
     const user = await UserModel.findByTelegramId(tgId);
@@ -326,7 +306,7 @@ function initTelegramBot() {
 
     const calls = typeof data.calls === 'number' ? data.calls : 0;
     const declined = typeof data.declined === 'number' ? data.declined : 0;
-    const wrongPerson = 0; // Не выводится отдельно в кнопке
+    const wrongPerson = 0;
     const answered = calls - declined;
     const declinedPct = calls > 0 ? Math.round((declined / calls) * 100) : 0;
     const answeredPct = calls > 0 ? Math.round((answered / calls) * 100) : 0;
@@ -342,9 +322,6 @@ function initTelegramBot() {
     );
   });
 
-  // =========================================
-  // Кнопка: 👤 Мой профиль
-  // =========================================
   bot.hears('👤 Мой профиль', async (ctx) => {
     const tgId = String(ctx.from.id);
     const user = await UserModel.findByTelegramId(tgId);
@@ -362,9 +339,6 @@ function initTelegramBot() {
     );
   });
 
-  // =========================================
-  // Кнопка: ℹ️ Помощь
-  // =========================================
   bot.hears('ℹ️ Помощь', (ctx) => {
     return ctx.reply(
       `ℹ️ *Справка по HURMO Bot*\n\n` +
@@ -382,9 +356,6 @@ function initTelegramBot() {
     );
   });
 
-  // =========================================
-  // /ping — Проверка работоспособности
-  // =========================================
   bot.command('ping', (ctx) => {
     const uptime = Math.floor(process.uptime());
     const hours = Math.floor(uptime / 3600);
@@ -397,25 +368,63 @@ function initTelegramBot() {
       { parse_mode: 'Markdown' }
     );
   });
+}
 
-  // =========================================
-  // Запуск бота
-  // =========================================
-  console.log('🤖 [Telegram Bot] Инициализация бота HURMO UZ...');
+/**
+ * Инициализирует и запускает все Telegram-боты, описанные в config.telegram.bots.
+ * Каждый бот использует свой собственный токен и список разрешённых пользователей.
+ * @returns {Promise<Telegraf[]>} Массив запущенных экземпляров ботов (пустой, если нет конфигурации)
+ */
+async function initTelegramBot() {
+  const botsConfig = config.telegram.bots || [];
 
-  bot.launch({ dropPendingUpdates: true })
-    .then(() => {
-      console.log('🤖 [Telegram Bot] ✅ Успешно запущен и слушает входящие сообщения!');
-    })
-    .catch((err) => {
-      console.error('⚠️ [Telegram Bot] Ошибка запуска бота:', err.message);
+  if (botsConfig.length === 0) {
+    console.warn('⚠️ [Telegram Bot] Не найдено ни одного бота в конфигурации (TELEGRAM_TOKEN_N / TELEGRAM_BOT_TOKEN не заданы). Боты не запущены.');
+    return [];
+  }
+
+  const launchedBots = [];
+
+  for (const botConfig of botsConfig) {
+    if (!botConfig.token) {
+      console.warn(`⚠️ [Telegram Bot #${botConfig.id}] Пропуск: токен не указан.`);
+      continue;
+    }
+    if (botConfig.allowedIds.length === 0) {
+      console.warn(`⚠️ [Telegram Bot #${botConfig.id}] Пропуск: TELEGRAM_ALLOWED_IDS/TELEGRAM_ADMIN_IDS/TELEGRAM_USER_ID_${botConfig.id} не настроены.`);
+      continue;
+    }
+
+    try {
+      const bot = new Telegraf(botConfig.token);
+      registerBotHandlers(bot, botConfig);
+
+      console.log(`🤖 [Telegram Bot #${botConfig.id}] Инициализация...`);
+      await bot.launch({ dropPendingUpdates: true });
+      console.log(`🤖 [Telegram Bot #${botConfig.id}] ✅ Успешно запущен и слушает входящие сообщения! (userId=${botConfig.userId || '—'}, allowed=${botConfig.allowedIds.length})`);
+
+      launchedBots.push(bot);
+    } catch (err) {
+      console.error(`⚠️ [Telegram Bot #${botConfig.id}] Ошибка запуска бота:`, err.message);
+    }
+  }
+
+  if (launchedBots.length > 0) {
+    process.once('SIGINT', () => {
+      console.log('[Telegram Bots] Остановка по SIGINT...');
+      launchedBots.forEach((bot, idx) => {
+        try { bot.stop('SIGINT'); } catch (_) {}
+      });
     });
+    process.once('SIGTERM', () => {
+      console.log('[Telegram Bots] Остановка по SIGTERM...');
+      launchedBots.forEach((bot, idx) => {
+        try { bot.stop('SIGTERM'); } catch (_) {}
+      });
+    });
+  }
 
-  // Graceful stop
-  process.once('SIGINT', () => bot.stop('SIGINT'));
-  process.once('SIGTERM', () => bot.stop('SIGTERM'));
-
-  return bot;
+  return launchedBots;
 }
 
 module.exports = { initTelegramBot };

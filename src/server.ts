@@ -33,6 +33,8 @@ const {
 
 const app = express();
 
+let telegramBots = [];
+
 const supervisorState = {
   dbReconnectAttempts: 0,
   lastDbReconnect: 0,
@@ -145,7 +147,14 @@ app.get('/health', async (req, res) => {
   const subsystems = {
     postgres: dbOk ? 'healthy' : (config.db.enabled ? 'degraded' : 'disabled'),
     cache: 'healthy',
-    telegram: config.telegram.botToken ? (config.telegram.allowedIds.length ? 'healthy' : 'degraded') : 'disabled',
+    telegram: (() => {
+      const bots = config.telegram.bots || [];
+      if (bots.length === 0) return 'disabled';
+      const healthyBots = bots.filter((b) => b.token && b.allowedIds.length > 0).length;
+      if (healthyBots === bots.length) return 'healthy';
+      if (healthyBots > 0) return 'degraded';
+      return 'disabled';
+    })(),
   };
   const overallDegraded = Object.values(subsystems).some(value => value === 'degraded');
   res.status(200).json({
@@ -192,14 +201,14 @@ async function startServer() {
     startStatusClassifierWorker();
     startStatusSuggestionScheduler();
 
-    app.listen(config.port, '0.0.0.0', () => {
+    app.listen(config.port, '0.0.0.0', async () => {
       console.log('====================================================');
       console.log('[HURMO Backend] Сервер успешно запущен на порту: ' + config.port);
       console.log('URL API: http://localhost:' + config.port);
       console.log('Режим: ' + String(config.nodeEnv).toUpperCase());
       console.log('Авторизация: JWT + Bcrypt + Rate-Limiting + RBAC');
       console.log('====================================================');
-      initTelegramBot();
+      telegramBots = await initTelegramBot();
     });
 
     startSupervisor();

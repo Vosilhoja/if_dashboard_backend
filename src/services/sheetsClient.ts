@@ -37,6 +37,10 @@ export async function fetchSheetRaw(
   spreadsheetId: string,
   sheetTitleHint?: string
 ): Promise<{ headers: string[]; rows: string[][]; rowCount: number }> {
+  if (!spreadsheetId || spreadsheetId.trim() === '') {
+    throw new Error('Spreadsheet ID is required (path not specified)');
+  }
+
   const api = getSheetsApi();
 
   // 1. Узнаём реальное имя первого листа (или совпадающего с hint), без лишних метаданных.

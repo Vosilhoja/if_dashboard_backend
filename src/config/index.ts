@@ -19,14 +19,68 @@ if (adminPassword && adminPassword.length < 12) {
   throw new Error('CRITICAL CONFIG ERROR: ADMIN_PASSWORD must contain at least 12 characters.');
 }
 
-const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN || '';
-const telegramAllowedIds = [process.env.TELEGRAM_ALLOWED_IDS, process.env.TELEGRAM_ADMIN_IDS]
+// ============================================================
+// Telegram Bot configuration — Railway-style multiple bots
+// ============================================================
+//
+// Legacy (single bot, backward compatible):
+//   TELEGRAM_BOT_TOKEN=123456:ABCdef
+//   TELEGRAM_USER_ID=777000              (optional, per-bot allowed user)
+//   TELEGRAM_ALLOWED_IDS=111,222,333
+//   TELEGRAM_ADMIN_IDS=111,222
+//
+// Railway-style (multiple bots, N = 1,2,3...):
+//   TELEGRAM_TOKEN_1=123456:ABCdef       (bot #1 token)
+//   TELEGRAM_USER_ID_1=777000            (bot #1 primary user, auto-allowed)
+//   TELEGRAM_TOKEN_2=789012:XYZghi       (bot #2 token)
+//   TELEGRAM_USER_ID_2=888000            (bot #2 primary user, auto-allowed)
+//   ...TELEGRAM_ALLOWED_IDS / TELEGRAM_ADMIN_IDS still apply globally
+//
+// Each bot record: { id, token, userId, allowedIds: [userId, ...globalAdmins] }
+// Legacy single-bot data is exposed as telegram.bots[0] plus the old
+// telegram.botToken / telegram.allowedIds / telegram.adminIds fields so
+// existing code (statusSuggestionService, /health, etc.) keeps working.
+// ============================================================
+
+const legacyToken = (process.env.TELEGRAM_BOT_TOKEN || '').trim();
+const legacyUserId = (process.env.TELEGRAM_USER_ID || '').trim();
+
+const globalAllowedIds = [process.env.TELEGRAM_ALLOWED_IDS, process.env.TELEGRAM_ADMIN_IDS]
   .filter(Boolean)
   .join(',')
   .split(',')
   .map(id => id.trim())
   .filter(id => /^\d+$/.test(id))
   .filter((id, index, ids) => ids.indexOf(id) === index);
+
+const telegramBots = [];
+
+for (let n = 1; n <= 99; n++) {
+  const token = (process.env[`TELEGRAM_TOKEN_${n}`] || '').trim();
+  if (!token) break;
+  const userId = (process.env[`TELEGRAM_USER_ID_${n}`] || '').trim();
+  const allowedIds = new Set(globalAllowedIds);
+  if (userId) allowedIds.add(userId);
+  telegramBots.push({
+    id: n,
+    token,
+    userId: userId || '',
+    allowedIds: [...allowedIds],
+  });
+}
+
+if (legacyToken && telegramBots.length === 0) {
+  const allowedIds = new Set(globalAllowedIds);
+  if (legacyUserId) allowedIds.add(legacyUserId);
+  telegramBots.push({
+    id: 0,
+    token: legacyToken,
+    userId: legacyUserId || '',
+    allowedIds: [...allowedIds],
+  });
+}
+
+const telegramBotToken = telegramBots[0]?.token || legacyToken || '';
 
 module.exports = {
   port: parseInt(process.env.PORT, 10) || 5000,
@@ -57,9 +111,10 @@ module.exports = {
       : false
   },
   telegram: {
+    bots: telegramBots,
     botToken: telegramBotToken,
-    allowedIds: telegramAllowedIds,
-    adminIds: telegramAllowedIds
+    allowedIds: globalAllowedIds,
+    adminIds: globalAllowedIds
   },
   google: {
     sheetMain: process.env.GOOGLE_SHEET_MAIN,

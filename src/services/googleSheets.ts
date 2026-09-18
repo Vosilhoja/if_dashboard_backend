@@ -382,7 +382,7 @@ function getSheetId(type) {
   }
 
   if (!id) {
-    throw new Error(`ID Google таблицы для типа "${type}" не настроен в .env.`);
+    throw new Error(`Google Sheet ID not configured for type "${type}". Please set the appropriate environment variable (e.g., GOOGLE_SHEET_MAIN).`);
   }
   return id;
 }
@@ -399,7 +399,7 @@ async function fetchAllRowsForSheet(type, forceRefresh = false) {
     const waitForWarmup = inFlight[cacheKey] || Promise.reject(new Error(`Прогрев таблицы "${type}" не запущен`));
     const timeout = new Promise((_, reject) => {
       setTimeout(() => reject(Object.assign(
-        new Error(`Истекло ожидание прогрева таблицы "${type}"`),
+        new Error(`Timeout waiting for sheet "${type}" to warm up. Please check your Google Sheet configuration and try again.`),
         { status: 503 },
       )), timeoutMs);
     });

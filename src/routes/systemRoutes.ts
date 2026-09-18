@@ -18,8 +18,40 @@ router.get('/health', authenticateToken, async (req, res) => {
   services.push(await timed('redis', async () => { if (!process.env.REDIS_URL) return { status: 'disabled' }; const client = new Redis(process.env.REDIS_URL, { lazyConnect: true, connectTimeout: 1500, maxRetriesPerRequest: 1 }); await client.ping(); await client.quit(); return {}; }));
   const sheets = getSheetsCacheHealth();
   services.push({ name: 'googleSheets', status: sheets.sheets.some((s) => s.available) ? 'ok' : (sheets.configured ? 'degraded' : 'disabled'), latencyMs: 0, ...sheets });
-  services.push({ name: 'telegram', status: config.telegram.botToken ? 'configured' : 'disabled', latencyMs: 0 });
+  services.push({ name: 'telegram', status: config.telegram.bots && config.telegram.bots.length > 0 ? 'configured' : (config.telegram.botToken ? 'configured' : 'disabled'), latencyMs: 0, bots: config.telegram.bots || [] });
   const failed = services.some((service) => service.status === 'error');
-  res.status(failed ? 503 : 200).json({ status: failed ? 'degraded' : 'ok', timestamp: new Date().toISOString(), services });
+  const criticalFailed = services.some((service) =>
+    service.status === 'error' &&
+    service.name !== 'postgresql' &&
+    service.name !== 'redis'
+  );
+  res.status(criticalFailed ? 503 : 200).json({
+    status: failed ? (criticalFailed ? 'down' : 'degraded') : 'ok',
+    timestamp: new Date().toISOString(),
+    services,
+  });
+});
+
+// Get Telegram bot configurations (super_admin only)
+router.get('/telegram/bots', authenticateToken, async (req, res) => {
+  try {
+    const user = await pool.query('SELECT role FROM users WHERE id = $1', [req.user.id]);
+    if (user.rows[0]?.role !== 'super_admin') {
+      return res.status(403).json({ error: 'Access denied. Super admin only.' });
+    }
+
+    const bots = config.telegram.bots || [];
+    const maskedBots = bots.map(bot => ({
+      id: bot.id,
+      token: bot.token ? `${bot.token.slice(0, 8)}...${bot.token.slice(-4)}` : '',
+      userId: bot.userId,
+      allowedIds: bot.allowedIds,
+    }));
+
+    res.json({ bots: maskedBots });
+  } catch (error) {
+    console.error('[System Routes] Error getting telegram bots:', error);
+    res.status(500).json({ error: 'Failed to get telegram bot configurations' });
+  }
 });
 module.exports = router;
