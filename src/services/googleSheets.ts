@@ -622,6 +622,15 @@ async function synchronizeSheet(type) {
     if (syncProgress.total === 1) {
       syncProgress.active = false;
       syncProgress.error = error.message || `Ошибка синхронизации ${type}`;
+    }
+    throw error;
+  }
+}
+
+// Export function for manual sync trigger
+async function triggerSync() {
+  return synchronizeSheets();
+}
       syncProgress.label = type;
       syncProgress.completedAt = new Date().toISOString();
     }
@@ -1641,6 +1650,7 @@ module.exports = {
   fetchNewRowsForSheet,
   synchronizeSheets,
   synchronizeSheet,
+  triggerSync,
   getColumnDText,
   clearSheetCache,
   withDashboardMetricsSlot,

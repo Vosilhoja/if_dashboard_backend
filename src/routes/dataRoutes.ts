@@ -30,6 +30,20 @@ router.get('/sync/status', authenticateToken, dashboardLimiter, (req, res) => {
   return res.status(200).json(getSyncStatus());
 });
 
+router.post('/sync/status', authenticateToken, dashboardRefreshLimiter, async (req, res, next) => {
+  try {
+    const { triggerSync } = require('../services/googleSheets');
+    const result = await triggerSync();
+    return res.status(200).json({ 
+      message: 'Синхронизация запущена',
+      ...result,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.post('/sheets/:type/sync', authenticateToken, dashboardRefreshLimiter, async (req, res, next) => {
   try {
     return res.status(200).json(await synchronizeSheet(req.params.type));
