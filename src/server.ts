@@ -21,6 +21,7 @@ const taskRoutes = require('./routes/taskRoutes');
 const { listCalendarEvents } = require('./services/externalIntegrations');
 const systemRoutes = require('./routes/systemRoutes');
 const settingsRoutes = require('./routes/settingsRoutes');
+const calendarRoutes = require('./routes/calendarRoutes');
 
 const { initTelegramBot, getTelegramRuntimeStatus } = require('./bot/telegramBot');
 const {
@@ -188,13 +189,7 @@ app.use('/api/calls', callRoutes);
 app.use('/api/stats', statsRoutes);
 app.use('/api/status', statusRoutes);
 app.use('/api/tasks', taskRoutes);
-app.get('/api/calendar/events', authenticateToken, async (req, res, next) => {
-  try {
-    res.json({ events: await listCalendarEvents({ timeMin: req.query.timeMin, timeMax: req.query.timeMax }) });
-  } catch (error) {
-    next(error);
-  }
-});
+app.use('/api/calendar', calendarRoutes);
 app.use('/api/system', systemRoutes);
 app.use('/api/settings', settingsRoutes);
 
