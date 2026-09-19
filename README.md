@@ -35,6 +35,12 @@ Start with `.env.example`. At minimum:
 
 If PostgreSQL is not available locally, set `DB_ENABLED=false` to use the development in-memory fallback. Do not use that fallback in production.
 
+### Todoist and Google Calendar
+
+When `TODOIST_API_TOKEN` is set, Todoist is used automatically as the task source for the dashboard and Telegram commands. Revoke previously exposed tokens and create a new one before adding it to Railway.
+
+Set `TELEGRAM_ENCRYPTION_KEY` to a base64-encoded 32-byte value (`openssl rand -base64 32`) for encrypted database-managed bot tokens. Set `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, and `GOOGLE_OAUTH_REDIRECT_URI` for Calendar OAuth; the refresh token is stored encrypted in PostgreSQL.
+
 For analytics, configure:
 
 ```env
