@@ -192,6 +192,18 @@ app.use(notFoundHandler);
 app.use(errorHandler);
 
 async function startServer() {
+  // Bind the port before contacting external services. Railway health checks
+  // must be able to reach /health even when PostgreSQL, Redis, or Sheets are
+  // temporarily unavailable during a cold start.
+  app.listen(config.port, '0.0.0.0', () => {
+    console.log('====================================================');
+    console.log('[HURMO Backend] Сервер слушает порт: ' + config.port);
+    console.log('URL API: http://localhost:' + config.port);
+    console.log('Режим: ' + String(config.nodeEnv).toUpperCase());
+    console.log('Авторизация: JWT + Bcrypt + Rate-Limiting + RBAC');
+    console.log('====================================================');
+  });
+
   try {
     console.log('[Bootstrap] Инициализация баз данных и системных служб...');
     await initDatabase();
@@ -202,25 +214,17 @@ async function startServer() {
     startCallWorker();
     startStatusClassifierWorker();
     startStatusSuggestionScheduler();
-
-    app.listen(config.port, '0.0.0.0', async () => {
-      console.log('====================================================');
-      console.log('[HURMO Backend] Сервер успешно запущен на порту: ' + config.port);
-      console.log('URL API: http://localhost:' + config.port);
-      console.log('Режим: ' + String(config.nodeEnv).toUpperCase());
-      console.log('Авторизация: JWT + Bcrypt + Rate-Limiting + RBAC');
-      console.log('====================================================');
-      telegramBots = await initTelegramBot();
-    });
-
     startSupervisor();
+
+    telegramBots = await initTelegramBot();
 
     prewarmDataCache().catch((error) => {
       console.error('[Bootstrap] Начальная синхронизация не выполнена:', error);
     });
   } catch (error) {
-    console.error('Фатальная ошибка при запуске сервера:', error);
-    process.exit(1);
+    // Keep the HTTP process alive in degraded mode. The health endpoint
+    // remains available and the supervisor can retry database connections.
+    console.error('[Bootstrap] Службы запущены в degraded-режиме:', error);
   }
 }
 

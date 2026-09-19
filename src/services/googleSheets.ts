@@ -36,6 +36,7 @@ let backgroundRefreshTimer = null;
 let backgroundRefreshIntervalMs = BACKGROUND_REFRESH_MS;
 const dashboardMetricsCache = new Map();
 const dashboardMetricsInFlight = new Map();
+const registrationClassificationCache = new Map();
 const MAX_DASHBOARD_METRICS_CACHE_ENTRIES = 32;
 const DASHBOARD_METRICS_CACHE_TTL_MS =
   parseInt(process.env.DASHBOARD_METRICS_CACHE_TTL_MS || '', 10) || 4 * 60 * 1000;
@@ -341,6 +342,22 @@ function buildRegistrationClassification(mainRows, numbersRows, startDate = '', 
   };
 }
 
+function getCachedRegistrationClassification(mainRows, numbersRows, startDate = '', endDate = '') {
+  const mainSnapshot = cache['sheet_main']?.timestamp || 0;
+  const numbersSnapshot = cache['sheet_numbers']?.timestamp || 0;
+  const key = `${mainSnapshot}:${numbersSnapshot}:${startDate}:${endDate}`;
+  const cached = registrationClassificationCache.get(key);
+  if (cached) return cached;
+
+  const classification = buildRegistrationClassification(mainRows, numbersRows, startDate, endDate);
+  registrationClassificationCache.set(key, classification);
+  if (registrationClassificationCache.size > 16) {
+    const oldestKey = registrationClassificationCache.keys().next().value;
+    registrationClassificationCache.delete(oldestKey);
+  }
+  return classification;
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -630,12 +647,6 @@ async function synchronizeSheet(type) {
 // Export function for manual sync trigger
 async function triggerSync() {
   return synchronizeSheets();
-}
-      syncProgress.label = type;
-      syncProgress.completedAt = new Date().toISOString();
-    }
-    throw error;
-  }
 }
 
 function getSyncStatus() {
@@ -1480,7 +1491,7 @@ async function getSheetPaginated(
   const allRows = cache[cacheKey]?.data || [];
   if (type === 'not_completed' || type === 'main') {
     const numbersRows = cache['sheet_numbers']?.data || [];
-    const classification = buildRegistrationClassification(allRows, numbersRows, startDate, endDate);
+    const classification = getCachedRegistrationClassification(allRows, numbersRows, startDate, endDate);
     const matchedPhonesSupport = classification.supportPhones;
 
     // Mark main_base rows using the exact same classification as the KPI.
