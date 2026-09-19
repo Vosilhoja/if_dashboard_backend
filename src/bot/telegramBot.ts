@@ -230,10 +230,11 @@ function registerBotHandlers(bot, botConfig) {
   bot.command('done', async (ctx) => {
     const user = await linkedTelegramUser(ctx);
     if (!user) return ctx.reply('🔒 Сначала привяжите аккаунт через `/link`.', { parse_mode: 'Markdown' });
-    const id = Number(ctx.message.text.trim().split(/\s+/)[1]);
-    if (!id) return ctx.reply('Формат: `/done <id>`', { parse_mode: 'Markdown' });
-    const task = await taskService.updateTask(id, { status: 'done' });
-    return ctx.reply(task ? `✅ Задача #${id} отмечена выполненной.` : '❌ Задача не найдена.');
+    const rawId = ctx.message.text.trim().split(/\s+/)[1];
+    if (!rawId) return ctx.reply('Формат: `/done <id>` (например, `/done 1` или `/done todoist-12345`)', { parse_mode: 'Markdown' });
+    const targetId = rawId.replace(/^#/, '');
+    const task = await taskService.closeTask(targetId);
+    return ctx.reply(task ? `✅ Задача ${rawId} отмечена выполненной.` : '❌ Задача не найдена.');
   });
 
   bot.on('text', async (ctx, next) => {

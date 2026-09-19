@@ -1,4 +1,11 @@
 const { pool, isPgConnected, inMemoryStore } = require('../db');
+const {
+  isTodoistConfigured,
+  listTodoistTasks,
+  createTodoistTask,
+  closeTodoistTask,
+  deleteTodoistTask,
+} = require('./todoist.service');
 
 function normalize(row) {
   const tagsRaw = row.tags || row.tagsRaw || [];
@@ -19,10 +26,61 @@ function normalize(row) {
     createdBy: row.created_by ?? row.createdBy ?? null,
     createdAt: row.created_at || row.createdAt,
     updatedAt: row.updated_at || row.updatedAt,
+    source: 'local',
   };
 }
 
-async function listTasks({ userId, status, period, priority, category, assignee, q, tags, sort, sortDir }: any = {}) {
+async function listTasks({ userId, status, period, priority, category, assignee, q, tags, sort, sortDir, source }: any = {}) {
+  const shouldUseTodoist = source === 'todoist' || (!source && isTodoistConfigured());
+
+  if (shouldUseTodoist) {
+    let items = await listTodoistTasks();
+    if (status) items = items.filter((t) => t.status === status);
+    if (priority) items = items.filter((t) => t.priority === priority);
+    if (category) items = items.filter((t) => (t.category || '').toLowerCase() === category.toLowerCase());
+    if (q) {
+      const query = String(q).toLowerCase();
+      items = items.filter((t) => [t.title, t.notes].some((v) => v && String(v).toLowerCase().includes(query)));
+    }
+    if (tags && tags.length) {
+      const arr = Array.isArray(tags) ? tags : [tags];
+      items = items.filter((t) => arr.some((tag) => (t.tags || []).includes(tag)));
+    }
+    if (period) {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      items = items.filter((task) => {
+        const d = task.dueAt ? new Date(task.dueAt) : null;
+        if (period === 'overdue') {
+          if (!d || Number.isNaN(d.getTime())) return false;
+          return d.getTime() < Date.now() && !['done', 'cancelled'].includes(task.status);
+        }
+        if (!d || Number.isNaN(d.getTime())) return false;
+        const day = new Date(d);
+        day.setHours(0, 0, 0, 0);
+        const diff = Math.round((day.getTime() - today.getTime()) / 86400000);
+        return period === 'today' ? diff === 0 : period === 'yesterday' ? diff === -1 : diff >= 1;
+      });
+    }
+
+    if (sort) {
+      const prOrder = { urgent: 0, high: 1, medium: 2, low: 3 } as const;
+      const sortDirection = (sortDir || '').toUpperCase() === 'DESC' ? 'DESC' : 'ASC';
+      items = [...items].sort((a, b) => {
+        if (sort === 'priority') {
+          const d = (prOrder[a.priority as keyof typeof prOrder] ?? 5) - (prOrder[b.priority as keyof typeof prOrder] ?? 5);
+          return sortDirection === 'DESC' ? -d : d;
+        }
+        const aT = a.dueAt ? new Date(a.dueAt).getTime() : Infinity;
+        const bT = b.dueAt ? new Date(b.dueAt).getTime() : Infinity;
+        const d = sortDirection === 'DESC' ? bT - aT : aT - bT;
+        return d;
+      });
+    }
+
+    return items;
+  }
+
   if (isPgConnected() && pool) {
     const params = [];
     const where = [];
@@ -58,6 +116,7 @@ async function listTasks({ userId, status, period, priority, category, assignee,
     );
     return result.rows.map(normalize);
   }
+
   return inMemoryStore.tasks
     .filter((task) => !userId || task.linkedUserId === Number(userId) || task.createdBy === Number(userId))
     .filter((task) => !status || task.status === status)
@@ -103,7 +162,20 @@ async function listTasks({ userId, status, period, priority, category, assignee,
     .map(normalize);
 }
 
-async function createTask(input) {
+async function createTask(input: any) {
+  const shouldUseTodoist = input.source === 'todoist' || (!input.source && isTodoistConfigured());
+  if (shouldUseTodoist) {
+    return createTodoistTask({
+      title: input.title,
+      content: input.content || input.title,
+      notes: input.notes || input.description,
+      priority: input.priority,
+      dueAt: input.dueAt,
+      tags: input.tags,
+      projectId: input.projectId,
+    });
+  }
+
   const data = {
     title: String(input.title || '').trim(),
     notes: input.notes || '',
@@ -133,7 +205,24 @@ async function createTask(input) {
   return normalize(task);
 }
 
-async function updateTask(id, input) {
+async function closeTask(id: string | number) {
+  const strId = String(id);
+  if (strId.startsWith('todoist-') || (isTodoistConfigured() && isNaN(Number(id)))) {
+    return closeTodoistTask(id);
+  }
+  return updateTask(id, { status: 'done' });
+}
+
+async function updateTask(id: string | number, input: any) {
+  const strId = String(id);
+  if (strId.startsWith('todoist-') || (isTodoistConfigured() && isNaN(Number(id)))) {
+    if (input.status === 'done') {
+      await closeTodoistTask(id);
+      return { id, ...input, status: 'done' };
+    }
+    return { id, ...input };
+  }
+
   const allowed = ['title', 'notes', 'status', 'priority', 'assigneeId', 'category', 'tags', 'comments', 'dueAt', 'linkedPhone', 'linkedUserId'];
   if (isPgConnected() && pool) {
     const sets = []; const values = [];
@@ -158,35 +247,50 @@ async function updateTask(id, input) {
   return normalize(task);
 }
 
-async function bulkUpdate(ids: number[], patch: any) {
+async function bulkUpdate(ids: (number | string)[], patch: any) {
   if (!ids || !ids.length) return { updated: 0 };
-  if (isPgConnected() && pool) {
-    const values = []; const sets = []; const allowed = ['status', 'priority', 'assigneeId', 'category'];
-    for (const key of allowed) if (patch[key] !== undefined) {
-      const columnMap: any = { assigneeId: 'assignee_id' };
-      const column = columnMap[key] || key;
-      let val = patch[key];
-      if (key === 'assigneeId') val = val ? Number(val) : null;
-      values.push(val); sets.push(`${column} = $${values.length}`);
-    }
-    if (!sets.length) return { updated: 0 };
-    const placeholders = ids.map((_, i) => `$${values.length + 1 + i}`).join(',');
-    ids.forEach((id) => values.push(Number(id)));
-    const r = await pool.query(
-      `UPDATE tasks SET ${sets.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id IN (${placeholders})`,
-      values
-    );
-    return { updated: r.rowCount || 0 };
-  }
   let count = 0;
   for (const id of ids) {
-    const task = inMemoryStore.tasks.find((t) => t.id === Number(id));
-    if (task) { Object.assign(task, patch, { updatedAt: new Date().toISOString() }); count++; }
+    const strId = String(id);
+    if (strId.startsWith('todoist-')) {
+      if (patch.status === 'done') {
+        await closeTodoistTask(id);
+        count++;
+      }
+    }
+  }
+
+  const numericIds = ids.filter((id) => !String(id).startsWith('todoist-') && !isNaN(Number(id))).map(Number);
+  if (numericIds.length > 0) {
+    if (isPgConnected() && pool) {
+      const values = []; const sets = []; const allowed = ['status', 'priority', 'assigneeId', 'category'];
+      for (const key of allowed) if (patch[key] !== undefined) {
+        const columnMap: any = { assigneeId: 'assignee_id' };
+        const column = columnMap[key] || key;
+        let val = patch[key];
+        if (key === 'assigneeId') val = val ? Number(val) : null;
+        values.push(val); sets.push(`${column} = $${values.length}`);
+      }
+      if (sets.length) {
+        const placeholders = numericIds.map((_, i) => `$${values.length + 1 + i}`).join(',');
+        numericIds.forEach((id) => values.push(Number(id)));
+        const r = await pool.query(
+          `UPDATE tasks SET ${sets.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id IN (${placeholders})`,
+          values
+        );
+        count += r.rowCount || 0;
+      }
+    } else {
+      for (const id of numericIds) {
+        const task = inMemoryStore.tasks.find((t) => t.id === Number(id));
+        if (task) { Object.assign(task, patch, { updatedAt: new Date().toISOString() }); count++; }
+      }
+    }
   }
   return { updated: count };
 }
 
-async function addComment(id, comment: { authorId: number; text: string }) {
+async function addComment(id: string | number, comment: { authorId: number; text: string }) {
   const task = await getTask(id);
   if (!task) return null;
   const newComment = { id: Date.now(), authorId: comment.authorId, text: comment.text, createdAt: new Date().toISOString() };
@@ -194,15 +298,19 @@ async function addComment(id, comment: { authorId: number; text: string }) {
   return updateTask(id, { comments });
 }
 
-async function getTask(id) {
-  const items = await listTasks({});
-  return items.find((task) => task.id === Number(id)) || null;
+async function getTask(id: string | number) {
+  const items = await listTasks({ source: String(id).startsWith('todoist-') ? 'todoist' : undefined });
+  return items.find((task) => String(task.id) === String(id) || Number(task.id) === Number(id)) || null;
 }
 
-async function deleteTask(id) {
+async function deleteTask(id: string | number) {
+  const strId = String(id);
+  if (strId.startsWith('todoist-') || (isTodoistConfigured() && isNaN(Number(id)))) {
+    return deleteTodoistTask(id);
+  }
   if (isPgConnected() && pool) return (await pool.query('DELETE FROM tasks WHERE id = $1 RETURNING id', [Number(id)])).rowCount > 0;
   const index = inMemoryStore.tasks.findIndex((task) => task.id === Number(id));
   if (index < 0) return false; inMemoryStore.tasks.splice(index, 1); return true;
 }
 
-module.exports = { listTasks, getTask, createTask, updateTask, deleteTask, bulkUpdate, addComment };
+module.exports = { listTasks, getTask, createTask, updateTask, closeTask, deleteTask, bulkUpdate, addComment };
