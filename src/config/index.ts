@@ -57,7 +57,7 @@ const telegramBots = [];
 
 for (let n = 1; n <= 99; n++) {
   const token = (process.env[`TELEGRAM_TOKEN_${n}`] || '').trim();
-  if (!token) break;
+  if (!token) continue;
   const userId = (process.env[`TELEGRAM_USER_ID_${n}`] || '').trim();
   const allowedIds = new Set(globalAllowedIds);
   if (userId) allowedIds.add(userId);

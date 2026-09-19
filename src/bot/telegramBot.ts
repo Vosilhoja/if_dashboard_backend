@@ -457,9 +457,15 @@ async function initTelegramBot() {
 
     try {
       const bot = new Telegraf(botConfig.token);
+      const botLabel = `🤖 [Telegram Bot #${botConfig.id}]`;
+      bot.catch((error, ctx) => {
+        console.error(`${botLabel} Ошибка обработки обновления ${ctx.update?.update_id || 'unknown'}:`, error);
+      });
       registerBotHandlers(bot, botConfig);
 
       console.log(`🤖 [Telegram Bot #${botConfig.id}] Инициализация...`);
+      // Polling cannot receive updates while a webhook is configured for the same bot.
+      await bot.telegram.deleteWebhook({ drop_pending_updates: true });
       await bot.launch({ dropPendingUpdates: true });
       console.log(`🤖 [Telegram Bot #${botConfig.id}] ✅ Успешно запущен и слушает входящие сообщения! (userId=${botConfig.userId || '—'}, allowed=${botConfig.allowedIds.length})`);
 
