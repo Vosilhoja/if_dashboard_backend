@@ -5,6 +5,7 @@ const { getSheetsCacheHealth } = require('../services/googleSheets');
 const Redis = require('ioredis');
 const config = require('../config');
 const { getTelegramRuntimeStatus } = require('../bot/telegramBot');
+const { todoistStatus } = require('../services/todoist.service');
 const router = express.Router();
 
 async function timed(name, check) {
@@ -19,6 +20,8 @@ router.get('/health', authenticateToken, async (req, res) => {
   services.push(await timed('redis', async () => { if (!process.env.REDIS_URL) return { status: 'disabled' }; const client = new Redis(process.env.REDIS_URL, { lazyConnect: true, connectTimeout: 1500, maxRetriesPerRequest: 1 }); await client.ping(); await client.quit(); return {}; }));
   const sheets = getSheetsCacheHealth();
   services.push({ name: 'googleSheets', status: sheets.sheets.some((s) => s.available) ? 'ok' : (sheets.configured ? 'degraded' : 'disabled'), latencyMs: 0, ...sheets });
+  const todoist = todoistStatus();
+  services.push({ name: 'todoist', status: todoist.configured ? 'configured' : 'disabled', latencyMs: 0, ...todoist });
   services.push({
     name: 'telegram',
     status: config.telegram.bots && config.telegram.bots.length > 0 ? 'configured' : (config.telegram.botToken ? 'configured' : 'disabled'),
