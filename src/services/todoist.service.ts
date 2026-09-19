@@ -3,6 +3,7 @@ type TodoistTask = {
   content: string;
   description?: string;
   is_completed?: boolean;
+  checked?: boolean;
   priority?: number;
   due?: { datetime?: string; date?: string; string?: string } | null;
   labels?: string[];
@@ -65,7 +66,7 @@ function mapToAppTask(task: TodoistTask): AppTask {
     id: `todoist-${task.id}`,
     title: task.content,
     notes: task.description || '',
-    status: task.is_completed ? 'done' : 'open',
+    status: (task.checked !== undefined ? task.checked : task.is_completed) ? 'done' : 'open',
     priority: mapTodoistPriorityToApp(task.priority),
     dueAt: task.due?.datetime || task.due?.date || null,
     category: 'Todoist',
@@ -82,20 +83,38 @@ export async function listTodoistTasks(): Promise<AppTask[]> {
   if (!token) throw new Error('TODOIST_API_TOKEN не настроен');
   if (cache && cache.expiresAt > Date.now()) return cache.value;
 
-  const response = await fetch('https://api.todoist.com/api/v1/tasks', {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  const data = (await response.json().catch(() => [])) as TodoistTask[] | { message?: string };
-  if (!response.ok) {
-    const retryAfter = response.headers.get('retry-after');
-    throw new Error(
-      response.status === 429
-        ? `Todoist временно ограничил запросы${retryAfter ? `, повторите через ${retryAfter} сек.` : ''}`
-        : (data as { message?: string }).message || 'Todoist API недоступен'
-    );
-  }
+  const allTasks: TodoistTask[] = [];
+  let nextCursor: string | null = null;
 
-  const tasks = (Array.isArray(data) ? data : []).map(mapToAppTask);
+  do {
+    const url = new URL('https://api.todoist.com/api/v1/tasks');
+    url.searchParams.set('limit', '200');
+    if (nextCursor) {
+      url.searchParams.set('cursor', nextCursor);
+    }
+
+    const response = await fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    const data = (await response.json().catch(() => ({}))) as { results?: TodoistTask[]; next_cursor?: string | null; message?: string };
+    if (!response.ok) {
+      const retryAfter = response.headers.get('retry-after');
+      throw new Error(
+        response.status === 429
+          ? `Todoist временно ограничил запросы${retryAfter ? `, повторите через ${retryAfter} сек.` : ''}`
+          : data.message || 'Todoist API недоступен'
+      );
+    }
+
+    if (Array.isArray(data.results)) {
+      allTasks.push(...data.results);
+    }
+
+    nextCursor = data.next_cursor || null;
+  } while (nextCursor);
+
+  const tasks = allTasks.map(mapToAppTask);
   cache = { expiresAt: Date.now() + 45_000, value: tasks };
   return tasks;
 }
@@ -177,7 +196,7 @@ export async function closeTodoistTask(id: string | number): Promise<boolean> {
     return true;
   }
 
-  if (response.status === 404) return false;
+  if (response.status === 404 || response.status === 409) return false;
   const data = await response.json().catch(() => ({}));
   throw new Error(data?.message || `Ошибка закрытия задачи Todoist: ${response.status}`);
 }
