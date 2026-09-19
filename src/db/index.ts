@@ -125,6 +125,17 @@ async function initDatabase() {
       );
       CREATE INDEX IF NOT EXISTS idx_telegram_bots_active ON telegram_bots (is_active);
 
+      CREATE TABLE IF NOT EXISTS google_calendar_connections (
+        id BIGSERIAL PRIMARY KEY,
+        user_id INTEGER UNIQUE NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        refresh_token_encrypted TEXT NOT NULL,
+        calendar_id VARCHAR(255) NOT NULL DEFAULT 'primary',
+        email VARCHAR(255),
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_google_calendar_connections_user ON google_calendar_connections (user_id);
+
       ALTER TABLE tasks ADD COLUMN IF NOT EXISTS priority VARCHAR(10) DEFAULT 'medium' CHECK (priority IN ('low','medium','high','urgent'));
       ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assignee_id INTEGER REFERENCES users(id) ON DELETE SET NULL;
       ALTER TABLE tasks ADD COLUMN IF NOT EXISTS category VARCHAR(100);

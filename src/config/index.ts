@@ -136,7 +136,10 @@ module.exports = {
     sheetSurveyAttempts: process.env.GOOGLE_SHEET_SURVEY_ATTEMPTS,
     sheetCalls: process.env.GOOGLE_SHEET_CALLS,
     clientEmail: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
-    privateKey: process.env.GOOGLE_PRIVATE_KEY
+    privateKey: process.env.GOOGLE_PRIVATE_KEY,
+    oauthClientId: process.env.GOOGLE_OAUTH_CLIENT_ID,
+    oauthClientSecret: process.env.GOOGLE_OAUTH_CLIENT_SECRET,
+    oauthRedirectUri: process.env.GOOGLE_OAUTH_REDIRECT_URI
   },
   roles: {
     SUPER_ADMIN: 'super_admin',
