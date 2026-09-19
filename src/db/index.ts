@@ -112,6 +112,19 @@ async function initDatabase() {
       CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks (assignee_id);
       CREATE INDEX IF NOT EXISTS idx_tasks_category ON tasks (category);
 
+      CREATE TABLE IF NOT EXISTS telegram_bots (
+        id BIGSERIAL PRIMARY KEY,
+        name VARCHAR(120) NOT NULL,
+        token_encrypted TEXT NOT NULL,
+        chat_id VARCHAR(50),
+        allowed_ids TEXT[] NOT NULL DEFAULT '{}',
+        enabled_features JSONB NOT NULL DEFAULT '[]'::jsonb,
+        is_active BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_telegram_bots_active ON telegram_bots (is_active);
+
       ALTER TABLE tasks ADD COLUMN IF NOT EXISTS priority VARCHAR(10) DEFAULT 'medium' CHECK (priority IN ('low','medium','high','urgent'));
       ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assignee_id INTEGER REFERENCES users(id) ON DELETE SET NULL;
       ALTER TABLE tasks ADD COLUMN IF NOT EXISTS category VARCHAR(100);

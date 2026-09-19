@@ -1,5 +1,6 @@
 const { Telegraf, Markup } = require('telegraf');
 const config = require('../config');
+const { listManagedBots } = require('../services/telegramBotStore');
 const UserModel = require('../models/User');
 const { calculateDashboardMetrics, searchSheetRecords } = require('../services/googleSheets');
 const {
@@ -81,18 +82,22 @@ function registerBotHandlers(bot, botConfig) {
     user?.role === 'super_admin' ||
     Array.isArray(user?.permissions) &&
       (user.permissions.includes('*') || user.permissions.includes(permission));
+  const featureEnabled = (permission) =>
+    !Array.isArray(botConfig.enabledFeatures) ||
+    botConfig.enabledFeatures.length === 0 ||
+    botConfig.enabledFeatures.includes(permission);
 
   const permissionDenied = (ctx) =>
     ctx.reply('⛔ Эта функция недоступна для вашей роли. Откройте «🛡 Мои права», чтобы увидеть доступные возможности.');
 
   const buildKeyboard = (user) => {
     const rows = [];
-    if (hasPermission(user, 'bot_view_summary')) rows.push(['📊 Сводка дашборда']);
-    if (hasPermission(user, 'bot_view_calls')) rows.push(['📞 Статистика обзвонов']);
-    if (hasPermission(user, 'bot_search_users')) rows.push(['🔎 Поиск пользователя']);
-    if (hasPermission(user, 'bot_manage_tasks')) rows.push(['✅ Мои задачи']);
-    rows.push(['👤 Мой профиль', '🛡 Мои права']);
-    rows.push(['⚙️ Статус системы', 'ℹ️ Помощь']);
+    if (hasPermission(user, 'bot_view_summary') && featureEnabled('bot_view_summary')) rows.push(['📊 Сводка дашборда']);
+    if (hasPermission(user, 'bot_view_calls') && featureEnabled('bot_view_calls')) rows.push(['📞 Статистика обзвонов']);
+    if (hasPermission(user, 'bot_search_users') && featureEnabled('bot_search_users')) rows.push(['🔎 Поиск пользователя']);
+    if (hasPermission(user, 'bot_manage_tasks') && featureEnabled('bot_manage_tasks')) rows.push(['✅ Мои задачи']);
+    if (featureEnabled('bot_view_profile') || featureEnabled('bot_view_permissions')) rows.push(['👤 Мой профиль', '🛡 Мои права']);
+    if (featureEnabled('bot_system_status')) rows.push(['⚙️ Статус системы', 'ℹ️ Помощь']);
     return Markup.keyboard(rows).resize();
   };
 
@@ -176,7 +181,7 @@ function registerBotHandlers(bot, botConfig) {
     if (!user) {
       return ctx.reply('🔒 Требуется авторизация. Привяжите аккаунт через `/link`.', { parse_mode: 'Markdown' });
     }
-    if (!hasPermission(user, 'bot_view_summary')) return permissionDenied(ctx);
+    if (!hasPermission(user, 'bot_view_summary') || !featureEnabled('bot_view_summary')) return permissionDenied(ctx);
 
     await ctx.reply('⏳ Загружаю данные из Google Sheets...');
 
@@ -437,32 +442,21 @@ function registerBotHandlers(bot, botConfig) {
  * Каждый бот использует свой собственный токен и список разрешённых пользователей.
  * @returns {Promise<Telegraf[]>} Массив запущенных экземпляров ботов (пустой, если нет конфигурации)
  */
-async function initTelegramBot() {
-  const botsConfig = config.telegram.bots || [];
-
-  if (botsConfig.length === 0) {
-    console.warn('⚠️ [Telegram Bot] Не найдено ни одного бота в конфигурации (TELEGRAM_TOKEN_N / TELEGRAM_BOT_TOKEN не заданы). Боты не запущены.');
-    return [];
+async function startTelegramBot(botConfig) {
+  if (!botConfig.token) {
+    telegramRuntime.set(botConfig.id, { status: 'error', error: 'Токен не указан' });
+    return null;
+  }
+  if (botConfig.allowedIds.length === 0) {
+    telegramRuntime.set(botConfig.id, {
+      status: 'error',
+      error: 'Не настроены разрешённые Telegram ID',
+    });
+    console.warn(`⚠️ [Telegram Bot #${botConfig.id}] Пропуск: не настроены разрешённые Telegram ID.`);
+    return null;
   }
 
-  const launchedBots = [];
-
-  for (const botConfig of botsConfig) {
-    if (!botConfig.token) {
-      telegramRuntime.set(botConfig.id, { status: 'error', error: 'Токен не указан' });
-      console.warn(`⚠️ [Telegram Bot #${botConfig.id}] Пропуск: токен не указан.`);
-      continue;
-    }
-    if (botConfig.allowedIds.length === 0) {
-      telegramRuntime.set(botConfig.id, {
-        status: 'error',
-        error: 'Не настроены разрешённые Telegram ID',
-      });
-      console.warn(`⚠️ [Telegram Bot #${botConfig.id}] Пропуск: TELEGRAM_ALLOWED_IDS/TELEGRAM_ADMIN_IDS/TELEGRAM_USER_ID_${botConfig.id} не настроены.`);
-      continue;
-    }
-
-    try {
+  try {
       const bot = new Telegraf(botConfig.token);
       const botLabel = `🤖 [Telegram Bot #${botConfig.id}]`;
       bot.catch((error, ctx) => {
@@ -503,7 +497,8 @@ async function initTelegramBot() {
           });
           console.error(`⚠️ [Telegram Bot #${botConfig.id}] Ошибка polling${conflict ? ' (409 Conflict)' : ''}:`, err);
         });
-      launchedBots.push(bot);
+      telegramRuntime.get(botConfig.id).bot = bot;
+      return bot;
     } catch (err) {
       telegramRuntime.set(botConfig.id, {
         status: 'error',
@@ -512,9 +507,36 @@ async function initTelegramBot() {
         allowedCount: botConfig.allowedIds.length,
       });
       console.error(`⚠️ [Telegram Bot #${botConfig.id}] Ошибка запуска бота:`, err.message);
-    }
+      return null;
   }
+}
 
+async function initTelegramBot() {
+  const botsConfig = config.telegram.bots || [];
+  if (botsConfig.length === 0) {
+    console.warn('⚠️ [Telegram Bot] Не найдено ни одного бота в конфигурации. Боты не запущены.');
+    return [];
+  }
+  const launchedBots = [];
+  for (const botConfig of botsConfig) {
+    const bot = await startTelegramBot(botConfig);
+    if (bot) launchedBots.push(bot);
+  }
+  try {
+    const managedBots = await listManagedBots();
+    for (const botConfig of managedBots.filter((bot) => bot.is_active)) {
+      const bot = await startTelegramBot({
+        id: botConfig.id,
+        token: botConfig.token,
+        userId: botConfig.chat_id,
+        allowedIds: botConfig.allowedIds,
+        enabledFeatures: botConfig.enabledFeatures,
+      });
+      if (bot) launchedBots.push(bot);
+    }
+  } catch (error) {
+    console.error('[Telegram Bot] Не удалось загрузить ботов из базы:', error.message);
+  }
   if (launchedBots.length > 0) {
     process.once('SIGINT', () => {
       console.log('[Telegram Bots] Остановка по SIGINT...');
@@ -533,8 +555,19 @@ async function initTelegramBot() {
   return launchedBots;
 }
 
-function getTelegramRuntimeStatus() {
-  return [...telegramRuntime.entries()].map(([id, state]) => ({ id, ...state }));
+async function stopTelegramBot(id) {
+  const state = telegramRuntime.get(Number(id)) || telegramRuntime.get(String(id));
+  if (!state?.bot) return false;
+  state.bot.stop(`managed-stop-${id}`);
+  telegramRuntime.set(Number(id), { ...state, bot: undefined, status: 'stopped' });
+  return true;
 }
 
-module.exports = { initTelegramBot, getTelegramRuntimeStatus };
+function getTelegramRuntimeStatus() {
+  return [...telegramRuntime.entries()].map(([id, state]) => {
+    const { bot, ...publicState } = state;
+    return { id, ...publicState };
+  });
+}
+
+module.exports = { initTelegramBot, startTelegramBot, stopTelegramBot, getTelegramRuntimeStatus, registerBotHandlers };
