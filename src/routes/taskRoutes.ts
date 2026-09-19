@@ -1,7 +1,7 @@
 const express = require('express');
 const { authenticateToken } = require('../middleware/auth');
 const tasks = require('../services/tasks');
-const { listTodoistTasks } = require('../services/externalIntegrations');
+const { listTodoistTasks } = require('../services/todoist.service');
 const router = express.Router();
 
 router.use(authenticateToken);

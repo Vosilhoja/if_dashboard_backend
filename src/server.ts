@@ -18,7 +18,6 @@ const callRoutes = require('./routes/callRoutes');
 const statusRoutes = require('./routes/statusRoutes');
 const statusAdminRoutes = require('./routes/statusAdminRoutes');
 const taskRoutes = require('./routes/taskRoutes');
-const { listCalendarEvents } = require('./services/externalIntegrations');
 const systemRoutes = require('./routes/systemRoutes');
 const settingsRoutes = require('./routes/settingsRoutes');
 const calendarRoutes = require('./routes/calendarRoutes');
