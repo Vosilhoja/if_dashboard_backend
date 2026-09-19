@@ -1682,4 +1682,6 @@ module.exports = {
   getCachedSheetRows,
   getSheetsCacheHealth,
   getRowChangeHistory,
+  getCallDate,
+  getMainRegistrationDate,
 };

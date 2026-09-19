@@ -14,7 +14,10 @@ const {
   searchSheetRecords,
   getCachedSheetRows,
   getRowChangeHistory,
+  getCallDate,
+  getMainRegistrationDate,
 } = require('../services/googleSheets');
+const { parseSheetDate } = require('../utils/dateUtils');
 const { getAnalyticsData } = require('../services/analyticsService');
 const { synchronizeSheets } = require('../services/googleSheets');
 
@@ -103,14 +106,21 @@ router.get('/search', authenticateToken, dashboardLimiter, async (req, res, next
 });
 
 router.get('/heatmap', authenticateToken, dashboardLimiter, (req, res) => {
+  const startDate = String(req.query.startDate || '');
+  const endDate = String(req.query.endDate || '');
   const buckets = {};
   for (const sheet of ['numbers', 'main', 'eskiz']) {
     for (const row of getCachedSheetRows(sheet)) {
-      const raw = Object.values(row).find((value) => /\d{1,2}[:.]\d{2}/.test(String(value)) || /\d{4}[-/.]\d{1,2}[-/.]\d{1,2}/.test(String(value)));
-      const date = raw ? new Date(String(raw).replace(/\./g, '-')) : null;
+      const raw = sheet === 'main' ? getMainRegistrationDate(row) : getCallDate(row);
+      const date = parseSheetDate(raw);
       if (!date || Number.isNaN(date.getTime())) continue;
-      const key = `${date.toISOString().slice(0, 10)} ${String(date.getHours()).padStart(2, '0')}:00`;
-      if (!buckets[key]) buckets[key] = { day: key.slice(0, 10), hour: date.getHours(), calls: 0, registrations: 0, errors: 0 };
+      const localParts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tashkent', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23' }).formatToParts(date);
+      const part = (type) => localParts.find((item) => item.type === type)?.value || '';
+      const day = `${part('year')}-${part('month')}-${part('day')}`;
+      if ((startDate && day < startDate) || (endDate && day > endDate)) continue;
+      const hour = Number(part('hour'));
+      const key = `${day} ${String(hour).padStart(2, '0')}:00`;
+      if (!buckets[key]) buckets[key] = { day, hour, calls: 0, registrations: 0, errors: 0 };
       if (sheet === 'numbers') buckets[key].calls += 1;
       if (sheet === 'main') buckets[key].registrations += 1;
       if (sheet === 'eskiz') buckets[key].errors += Object.values(row).some((v) => /error|ошиб|failed|fail/i.test(String(v))) ? 1 : 0;
