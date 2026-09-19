@@ -1,4 +1,6 @@
-async function listTodoistTasks() {
+const todoistService = require('./todoist.service');
+
+async function listTodoistTasksLegacy() {
   const token = String(process.env.TODOIST_API_TOKEN || '').trim();
   if (!token) throw new Error('TODOIST_API_TOKEN не настроен');
   const response = await fetch('https://api.todoist.com/rest/v2/tasks', {
@@ -49,4 +51,4 @@ async function listCalendarEvents({ timeMin, timeMax } = {}) {
   }));
 }
 
-module.exports = { listTodoistTasks, listCalendarEvents };
+module.exports = { listTodoistTasks: todoistService.listTodoistTasks, listCalendarEvents };
