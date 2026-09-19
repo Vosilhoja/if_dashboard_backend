@@ -1,12 +1,16 @@
 const express = require('express');
 const { authenticateToken } = require('../middleware/auth');
 const tasks = require('../services/tasks');
+const { listTodoistTasks } = require('../services/externalIntegrations');
 const router = express.Router();
 
 router.use(authenticateToken);
 
 router.get('/', async (req, res, next) => {
   try {
+    if (req.query.source === 'todoist') {
+      return res.json({ tasks: await listTodoistTasks() });
+    }
     const tags = req.query.tags ? (Array.isArray(req.query.tags) ? req.query.tags : [req.query.tags]) : undefined;
     const result = await tasks.listTasks({
       userId: req.query.mine === '1' ? req.user.id : undefined,

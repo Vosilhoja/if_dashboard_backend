@@ -85,9 +85,22 @@ router.post('/telegram/:id/test', authenticateToken, authorizeRoles('super_admin
         if (!telegramResponse.ok || !payload.ok) {
           return res.status(502).json({ error: payload.description || 'Telegram API недоступен' });
         }
+        const chatId = String(bot.userId || '').trim();
+        if (!/^-?\d+$/.test(chatId)) {
+          return res.status(400).json({ error: 'Для тестовой отправки не настроен корректный TELEGRAM_USER_ID_N' });
+        }
+        const sendResponse = await fetch(`https://api.telegram.org/bot${bot.token}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: chatId, text: 'Test' }),
+        });
+        const sendPayload = await sendResponse.json();
+        if (!sendResponse.ok || !sendPayload.ok) {
+          return res.status(502).json({ error: sendPayload.description || 'Telegram не доставил тестовое сообщение' });
+        }
         return res.json({
           ok: true,
-          message: `Бот @${payload.result?.username || payload.result?.first_name || 'без имени'} отвечает`,
+          message: `Сообщение Test отправлено в Telegram пользователю ${chatId}`,
           bot: { id: payload.result?.id, username: payload.result?.username },
         });
       })

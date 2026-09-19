@@ -7,6 +7,7 @@ const { initDatabase } = require('./db');
 const { loadLearnedPhrasesFromDb } = require('./utils/statusMatcher');
 const { seedDefaultUsers } = require('./db/seed');
 const { apiLimiter } = require('./middleware/rateLimiter');
+const { authenticateToken } = require('./middleware/auth');
 const { notFoundHandler, errorHandler } = require('./middleware/errorHandler');
 
 const authRoutes = require('./routes/authRoutes');
@@ -17,6 +18,7 @@ const callRoutes = require('./routes/callRoutes');
 const statusRoutes = require('./routes/statusRoutes');
 const statusAdminRoutes = require('./routes/statusAdminRoutes');
 const taskRoutes = require('./routes/taskRoutes');
+const { listCalendarEvents } = require('./services/externalIntegrations');
 const systemRoutes = require('./routes/systemRoutes');
 const settingsRoutes = require('./routes/settingsRoutes');
 
@@ -185,6 +187,13 @@ app.use('/api/calls', callRoutes);
 app.use('/api/stats', statsRoutes);
 app.use('/api/status', statusRoutes);
 app.use('/api/tasks', taskRoutes);
+app.get('/api/calendar/events', authenticateToken, async (req, res, next) => {
+  try {
+    res.json({ events: await listCalendarEvents({ timeMin: req.query.timeMin, timeMax: req.query.timeMax }) });
+  } catch (error) {
+    next(error);
+  }
+});
 app.use('/api/system', systemRoutes);
 app.use('/api/settings', settingsRoutes);
 
