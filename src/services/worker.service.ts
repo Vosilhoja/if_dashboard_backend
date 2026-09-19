@@ -37,7 +37,7 @@ function startCallWorker() {
 
   if (!clientEmail || !privateKey || !spreadsheetId) {
     console.warn(
-      '[Call worker] Google Sheets не настроен. Worker отключен; добавьте GOOGLE_SERVICE_ACCOUNT_EMAIL, GOOGLE_PRIVATE_KEY и GOOGLE_SHEET_CALLS в Railway Variables.'
+      '[Call worker] Google Sheets не настроен. Worker отключен; добавьте GOOGLE_SERVICE_ACCOUNT_EMAIL, GOOGLE_PRIVATE_KEY и GOOGLE_SHEET_CALLS в конфигурацию окружения сервера.'
     );
     return null;
   }
