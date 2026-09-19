@@ -82,6 +82,16 @@ if (legacyToken && telegramBots.length === 0) {
 
 const telegramBotToken = telegramBots[0]?.token || legacyToken || '';
 
+const telegramFeatures = [
+  { key: 'bot_view_summary', label: 'Сводка дашборда', description: 'Оперативные метрики и показатели' },
+  { key: 'bot_view_calls', label: 'Статистика обзвонов', description: 'Показатели колл-центра' },
+  { key: 'bot_search_users', label: 'Поиск пользователей', description: 'Поиск по номеру или идентификатору' },
+  { key: 'bot_view_profile', label: 'Мой профиль', description: 'Профиль и статус сотрудника' },
+  { key: 'bot_manage_tasks', label: 'Задачи', description: 'Просмотр и создание задач' },
+  { key: 'bot_system_status', label: 'Статус системы', description: 'Проверка доступности API' },
+  { key: 'bot_view_permissions', label: 'Мои права', description: 'Просмотр роли и доступных функций' },
+];
+
 module.exports = {
   port: parseInt(process.env.PORT, 10) || 5000,
   nodeEnv: process.env.NODE_ENV || 'development',
@@ -115,6 +125,8 @@ module.exports = {
     botToken: telegramBotToken,
     allowedIds: globalAllowedIds,
     adminIds: globalAllowedIds
+    ,
+    features: telegramFeatures
   },
   google: {
     sheetMain: process.env.GOOGLE_SHEET_MAIN,
@@ -131,7 +143,8 @@ module.exports = {
     ADMIN: 'admin',
     MANAGER: 'manager',
     OPERATOR: 'operator',
-    VIEWER: 'viewer'
+    VIEWER: 'viewer',
+    telegramFeatures
   },
   auth: {
     storage: process.env.AUTH_STORAGE || (process.env.DATABASE_URL ? 'postgres' : 'memory'),

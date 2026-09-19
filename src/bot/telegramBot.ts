@@ -75,6 +75,31 @@ function registerBotHandlers(bot, botConfig) {
     return next();
   });
 
+  const hasPermission = (user, permission) =>
+    user?.role === 'super_admin' ||
+    Array.isArray(user?.permissions) &&
+      (user.permissions.includes('*') || user.permissions.includes(permission));
+
+  const permissionDenied = (ctx) =>
+    ctx.reply('⛔ Эта функция недоступна для вашей роли. Откройте «🛡 Мои права», чтобы увидеть доступные возможности.');
+
+  const buildKeyboard = (user) => {
+    const rows = [];
+    if (hasPermission(user, 'bot_view_summary')) rows.push(['📊 Сводка дашборда']);
+    if (hasPermission(user, 'bot_view_calls')) rows.push(['📞 Статистика обзвонов']);
+    if (hasPermission(user, 'bot_search_users')) rows.push(['🔎 Поиск пользователя']);
+    if (hasPermission(user, 'bot_manage_tasks')) rows.push(['✅ Мои задачи']);
+    rows.push(['👤 Мой профиль', '🛡 Мои права']);
+    rows.push(['⚙️ Статус системы', 'ℹ️ Помощь']);
+    return Markup.keyboard(rows).resize();
+  };
+
+  async function linkedTelegramUser(ctx) {
+    const user = await UserModel.findByTelegramId(String(ctx.from?.id || ''));
+    if (!user) return null;
+    return UserModel.findById(user.id);
+  }
+
   bot.start(async (ctx) => {
     const tgUser = ctx.from;
     const tgId = String(tgUser.id);
@@ -90,10 +115,7 @@ function registerBotHandlers(bot, botConfig) {
         `Выберите нужное действие в меню ниже:`,
         {
           parse_mode: 'Markdown',
-          ...Markup.keyboard([
-            ['📊 Сводка дашборда', '📞 Статистика обзвонов'],
-            ['👤 Мой профиль', 'ℹ️ Помощь']
-          ]).resize()
+          ...buildKeyboard(await UserModel.findById(systemUser.id))
         }
       );
     }
@@ -138,10 +160,7 @@ function registerBotHandlers(bot, botConfig) {
         `Теперь вам доступны функции мониторинга и отчетов.`,
         {
           parse_mode: 'Markdown',
-          ...Markup.keyboard([
-            ['📊 Сводка дашборда', '📞 Статистика обзвонов'],
-            ['👤 Мой профиль', 'ℹ️ Помощь']
-          ]).resize()
+          ...buildKeyboard(await UserModel.findById(user.id))
         }
       );
     } catch (err) {
@@ -151,11 +170,11 @@ function registerBotHandlers(bot, botConfig) {
   });
 
   bot.command('stats', async (ctx) => {
-    const tgId = String(ctx.from.id);
-    const user = await UserModel.findByTelegramId(tgId);
+    const user = await linkedTelegramUser(ctx);
     if (!user) {
       return ctx.reply('🔒 Требуется авторизация. Привяжите аккаунт через `/link`.', { parse_mode: 'Markdown' });
     }
+    if (!hasPermission(user, 'bot_view_summary')) return permissionDenied(ctx);
 
     await ctx.reply('⏳ Загружаю данные из Google Sheets...');
 
@@ -181,13 +200,10 @@ function registerBotHandlers(bot, botConfig) {
     );
   });
 
-  async function linkedTelegramUser(ctx) {
-    return UserModel.findByTelegramId(String(ctx.from?.id || ''));
-  }
-
   bot.command('tasks', async (ctx) => {
     const user = await linkedTelegramUser(ctx);
     if (!user) return ctx.reply('🔒 Сначала привяжите аккаунт через `/link`.', { parse_mode: 'Markdown' });
+    if (!hasPermission(user, 'bot_manage_tasks')) return permissionDenied(ctx);
     const period = ctx.message.text.includes('today') ? 'today' : undefined;
     const items = await taskService.listTasks({ userId: user.id, period });
     return ctx.reply(items.length ? items.map((task) => `#${task.id} [${task.status}] ${task.title}${task.dueAt ? ` — ${new Date(task.dueAt).toLocaleString('ru-RU')}` : ''}`).join('\n') : '✅ Задач нет.');
@@ -196,6 +212,7 @@ function registerBotHandlers(bot, botConfig) {
   bot.command('task', async (ctx) => {
     const user = await linkedTelegramUser(ctx);
     if (!user) return ctx.reply('🔒 Сначала привяжите аккаунт через `/link`.', { parse_mode: 'Markdown' });
+    if (!hasPermission(user, 'bot_manage_tasks')) return permissionDenied(ctx);
     const text = ctx.message.text.trim().replace(/^\/task\s*/i, '');
     const match = text.match(/^(.*?)(?:\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}))?$/);
     if (!match || !match[1].trim()) return ctx.reply('Формат: `/task <название> [YYYY-MM-DD HH:mm]`', { parse_mode: 'Markdown' });
@@ -222,6 +239,9 @@ function registerBotHandlers(bot, botConfig) {
   });
 
   bot.command('find', async (ctx) => {
+    const user = await linkedTelegramUser(ctx);
+    if (!user) return ctx.reply('🔒 Сначала привяжите аккаунт через `/link`.', { parse_mode: 'Markdown' });
+    if (!hasPermission(user, 'bot_search_users')) return permissionDenied(ctx);
     const parts = ctx.message.text.trim().split(/\s+/).slice(1);
     const query = parts.shift() || '';
     const requestedSheet = parts.shift()?.toLowerCase();
@@ -261,11 +281,11 @@ function registerBotHandlers(bot, botConfig) {
   });
 
   bot.hears('📊 Сводка дашборда', async (ctx) => {
-    const tgId = String(ctx.from.id);
-    const user = await UserModel.findByTelegramId(tgId);
+    const user = await linkedTelegramUser(ctx);
     if (!user) {
       return ctx.reply('🔒 Требуется авторизация. Привяжите аккаунт через команду `/link`.', { parse_mode: 'Markdown' });
     }
+    if (!hasPermission(user, 'bot_view_summary')) return permissionDenied(ctx);
 
     await ctx.reply('⏳ Загружаю актуальные данные из Google Sheets...');
 
@@ -291,11 +311,11 @@ function registerBotHandlers(bot, botConfig) {
   });
 
   bot.hears('📞 Статистика обзвонов', async (ctx) => {
-    const tgId = String(ctx.from.id);
-    const user = await UserModel.findByTelegramId(tgId);
+    const user = await linkedTelegramUser(ctx);
     if (!user) {
       return ctx.reply('🔒 Требуется авторизация через `/link`.', { parse_mode: 'Markdown' });
     }
+    if (!hasPermission(user, 'bot_view_calls')) return permissionDenied(ctx);
 
     await ctx.reply('⏳ Получаю статистику...');
 
@@ -323,11 +343,11 @@ function registerBotHandlers(bot, botConfig) {
   });
 
   bot.hears('👤 Мой профиль', async (ctx) => {
-    const tgId = String(ctx.from.id);
-    const user = await UserModel.findByTelegramId(tgId);
+    const user = await linkedTelegramUser(ctx);
     if (!user) {
       return ctx.reply('⚠️ Ваш профиль не привязан. Используйте `/link <логин> <пароль>`.', { parse_mode: 'Markdown' });
     }
+    if (!hasPermission(user, 'bot_view_profile')) return permissionDenied(ctx);
 
     return ctx.reply(
       `👤 *Профиль сотрудника HURMO*\n\n` +
@@ -337,6 +357,40 @@ function registerBotHandlers(bot, botConfig) {
       `• *Статус:* ${user.is_active ? '🟢 Активен' : '🔴 Заблокирован'}`,
       { parse_mode: 'Markdown' }
     );
+  });
+
+  bot.hears('🔎 Поиск пользователя', (ctx) =>
+    ctx.reply('Введите команду: `/find <номер или ID> [таблица]`', { parse_mode: 'Markdown' })
+  );
+
+  bot.hears('✅ Мои задачи', async (ctx) => {
+    const user = await linkedTelegramUser(ctx);
+    if (!user) return ctx.reply('🔒 Сначала привяжите аккаунт через `/link`.', { parse_mode: 'Markdown' });
+    if (!hasPermission(user, 'bot_manage_tasks')) return permissionDenied(ctx);
+    const items = await taskService.listTasks({ userId: user.id });
+    return ctx.reply(items.length
+      ? items.map((task) => `#${task.id} [${task.status}] ${task.title}`).join('\n')
+      : '✅ Задач нет.');
+  });
+
+  bot.hears('🛡 Мои права', async (ctx) => {
+    const user = await linkedTelegramUser(ctx);
+    if (!user) return ctx.reply('🔒 Сначала привяжите аккаунт через `/link`.', { parse_mode: 'Markdown' });
+    const features = config.telegram.features
+      .filter((feature) => hasPermission(user, feature.key))
+      .map((feature) => `✅ ${feature.label} — ${feature.description}`);
+    return ctx.reply(
+      `🛡 *Роль:* \`${user.role}\`\n\n` +
+      (features.length ? features.join('\n') : 'Нет доступных функций.'),
+      { parse_mode: 'Markdown' }
+    );
+  });
+
+  bot.hears('⚙️ Статус системы', async (ctx) => {
+    const user = await linkedTelegramUser(ctx);
+    if (!user) return ctx.reply('🔒 Сначала привяжите аккаунт через `/link`.', { parse_mode: 'Markdown' });
+    if (!hasPermission(user, 'bot_system_status')) return permissionDenied(ctx);
+    return ctx.reply(`⚙️ *Статус HURMO UZ*\n\n✅ Бот работает\n⏱ Аптайм: ${Math.floor(process.uptime() / 60)} мин.\n🤖 Ботов в конфигурации: ${config.telegram.bots.length}`, { parse_mode: 'Markdown' });
   });
 
   bot.hears('ℹ️ Помощь', (ctx) => {
@@ -367,6 +421,12 @@ function registerBotHandlers(bot, botConfig) {
       `🌐 API: ${config.clientUrl}`,
       { parse_mode: 'Markdown' }
     );
+  });
+
+  bot.command('menu', async (ctx) => {
+    const user = await linkedTelegramUser(ctx);
+    if (!user) return ctx.reply('🔒 Сначала привяжите аккаунт через `/link`.', { parse_mode: 'Markdown' });
+    return ctx.reply('🎛 Главное меню обновлено. Доступные кнопки зависят от вашей роли.', buildKeyboard(user));
   });
 }
 

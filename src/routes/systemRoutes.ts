@@ -18,7 +18,16 @@ router.get('/health', authenticateToken, async (req, res) => {
   services.push(await timed('redis', async () => { if (!process.env.REDIS_URL) return { status: 'disabled' }; const client = new Redis(process.env.REDIS_URL, { lazyConnect: true, connectTimeout: 1500, maxRetriesPerRequest: 1 }); await client.ping(); await client.quit(); return {}; }));
   const sheets = getSheetsCacheHealth();
   services.push({ name: 'googleSheets', status: sheets.sheets.some((s) => s.available) ? 'ok' : (sheets.configured ? 'degraded' : 'disabled'), latencyMs: 0, ...sheets });
-  services.push({ name: 'telegram', status: config.telegram.bots && config.telegram.bots.length > 0 ? 'configured' : (config.telegram.botToken ? 'configured' : 'disabled'), latencyMs: 0, bots: config.telegram.bots || [] });
+  services.push({
+    name: 'telegram',
+    status: config.telegram.bots && config.telegram.bots.length > 0 ? 'configured' : (config.telegram.botToken ? 'configured' : 'disabled'),
+    latencyMs: 0,
+    bots: (config.telegram.bots || []).map((bot) => ({
+      id: bot.id,
+      userId: bot.userId,
+      allowedCount: bot.allowedIds.length,
+    })),
+  });
   const failed = services.some((service) => service.status === 'error');
   const criticalFailed = services.some((service) =>
     service.status === 'error' &&

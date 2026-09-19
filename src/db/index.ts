@@ -7,10 +7,10 @@ const inMemoryStore = {
   users: [],
   roles: [
     { id: 1, name: 'super_admin', description: 'Полный доступ ко всей системе и управлению ролями', permissions: ['*'] },
-    { id: 2, name: 'admin', description: 'Администратор: просмотр аналитики, экспорт, управление операторами', permissions: ['view_dashboard', 'export_data', 'manage_operators', 'bot_admin'] },
-    { id: 3, name: 'manager', description: 'Менеджер: расширенная аналитика и экспорт отчетов', permissions: ['view_dashboard', 'export_data'] },
-    { id: 4, name: 'operator', description: 'Оператор колл-центра: работа со звонками и базой', permissions: ['view_calls', 'edit_call_status'] },
-    { id: 5, name: 'viewer', description: 'Наблюдатель: только чтение сводных отчетов', permissions: ['view_dashboard'] }
+    { id: 2, name: 'admin', description: 'Администратор: просмотр аналитики, экспорт, управление операторами', permissions: ['view_dashboard', 'export_data', 'manage_operators', 'bot_admin', 'bot_view_summary', 'bot_view_calls', 'bot_search_users', 'bot_view_profile', 'bot_manage_tasks', 'bot_system_status', 'bot_view_permissions'] },
+    { id: 3, name: 'manager', description: 'Менеджер: расширенная аналитика и экспорт отчетов', permissions: ['view_dashboard', 'export_data', 'bot_view_summary', 'bot_view_calls', 'bot_search_users', 'bot_view_profile', 'bot_manage_tasks', 'bot_system_status', 'bot_view_permissions'] },
+    { id: 4, name: 'operator', description: 'Оператор колл-центра: работа со звонками и базой', permissions: ['view_calls', 'edit_call_status', 'bot_view_calls', 'bot_search_users', 'bot_view_profile', 'bot_manage_tasks', 'bot_system_status', 'bot_view_permissions'] },
+    { id: 5, name: 'viewer', description: 'Наблюдатель: только чтение сводных отчетов', permissions: ['view_dashboard', 'bot_view_summary', 'bot_view_profile', 'bot_system_status', 'bot_view_permissions'] }
   ],
   auditLogs: [],
   tasks: []
