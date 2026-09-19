@@ -22,7 +22,7 @@ const { listCalendarEvents } = require('./services/externalIntegrations');
 const systemRoutes = require('./routes/systemRoutes');
 const settingsRoutes = require('./routes/settingsRoutes');
 
-const { initTelegramBot } = require('./bot/telegramBot');
+const { initTelegramBot, getTelegramRuntimeStatus } = require('./bot/telegramBot');
 const {
   prewarmDataCache,
   startBackgroundDataRefresh,
@@ -153,10 +153,11 @@ app.get('/health', async (req, res) => {
     telegram: (() => {
       const bots = config.telegram.bots || [];
       if (bots.length === 0) return 'disabled';
-      const healthyBots = bots.filter((b) => b.token && b.allowedIds.length > 0).length;
+      const runtime = getTelegramRuntimeStatus();
+      const healthyBots = runtime.filter((b) => b.status === 'running').length;
       if (healthyBots === bots.length) return 'healthy';
       if (healthyBots > 0) return 'degraded';
-      return 'disabled';
+      return 'error';
     })(),
   };
   const overallDegraded = Object.values(subsystems).some(value => value === 'degraded');

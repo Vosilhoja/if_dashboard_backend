@@ -8,6 +8,8 @@ const {
 } = require('../services/telegramLink.service');
 const taskService = require('../services/tasks');
 
+const telegramRuntime = new Map();
+
 /**
  * Форматирует число: 0 → '—'
  */
@@ -447,10 +449,15 @@ async function initTelegramBot() {
 
   for (const botConfig of botsConfig) {
     if (!botConfig.token) {
+      telegramRuntime.set(botConfig.id, { status: 'error', error: 'Токен не указан' });
       console.warn(`⚠️ [Telegram Bot #${botConfig.id}] Пропуск: токен не указан.`);
       continue;
     }
     if (botConfig.allowedIds.length === 0) {
+      telegramRuntime.set(botConfig.id, {
+        status: 'error',
+        error: 'Не настроены разрешённые Telegram ID',
+      });
       console.warn(`⚠️ [Telegram Bot #${botConfig.id}] Пропуск: TELEGRAM_ALLOWED_IDS/TELEGRAM_ADMIN_IDS/TELEGRAM_USER_ID_${botConfig.id} не настроены.`);
       continue;
     }
@@ -466,11 +473,44 @@ async function initTelegramBot() {
       console.log(`🤖 [Telegram Bot #${botConfig.id}] Инициализация...`);
       // Polling cannot receive updates while a webhook is configured for the same bot.
       await bot.telegram.deleteWebhook({ drop_pending_updates: true });
-      await bot.launch({ dropPendingUpdates: true });
-      console.log(`🤖 [Telegram Bot #${botConfig.id}] ✅ Успешно запущен и слушает входящие сообщения! (userId=${botConfig.userId || '—'}, allowed=${botConfig.allowedIds.length})`);
-
+      telegramRuntime.set(botConfig.id, {
+        status: 'starting',
+        error: null,
+        userId: botConfig.userId || '',
+        allowedCount: botConfig.allowedIds.length,
+      });
+      // Do not await polling: Telegraf keeps this promise pending for the
+      // lifetime of long polling and would block the next bot/bootstrap step.
+      void bot.launch({ dropPendingUpdates: true })
+        .then(() => {
+          telegramRuntime.set(botConfig.id, {
+            status: 'running',
+            error: null,
+            userId: botConfig.userId || '',
+            allowedCount: botConfig.allowedIds.length,
+          });
+          console.log(`🤖 [Telegram Bot #${botConfig.id}] ✅ Polling запущен (userId=${botConfig.userId || '—'}, allowed=${botConfig.allowedIds.length})`);
+        })
+        .catch((err) => {
+          const conflict = err?.response?.error_code === 409 || /409|conflict/i.test(String(err?.message || err));
+          telegramRuntime.set(botConfig.id, {
+            status: 'error',
+            error: conflict
+              ? '409 Conflict: другой экземпляр уже получает обновления этого бота'
+              : String(err?.message || err),
+            userId: botConfig.userId || '',
+            allowedCount: botConfig.allowedIds.length,
+          });
+          console.error(`⚠️ [Telegram Bot #${botConfig.id}] Ошибка polling${conflict ? ' (409 Conflict)' : ''}:`, err);
+        });
       launchedBots.push(bot);
     } catch (err) {
+      telegramRuntime.set(botConfig.id, {
+        status: 'error',
+        error: String(err?.message || err),
+        userId: botConfig.userId || '',
+        allowedCount: botConfig.allowedIds.length,
+      });
       console.error(`⚠️ [Telegram Bot #${botConfig.id}] Ошибка запуска бота:`, err.message);
     }
   }
@@ -493,4 +533,8 @@ async function initTelegramBot() {
   return launchedBots;
 }
 
-module.exports = { initTelegramBot };
+function getTelegramRuntimeStatus() {
+  return [...telegramRuntime.entries()].map(([id, state]) => ({ id, ...state }));
+}
+
+module.exports = { initTelegramBot, getTelegramRuntimeStatus };

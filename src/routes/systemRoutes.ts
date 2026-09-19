@@ -4,6 +4,7 @@ const { pool, isPgConnected } = require('../db');
 const { getSheetsCacheHealth } = require('../services/googleSheets');
 const Redis = require('ioredis');
 const config = require('../config');
+const { getTelegramRuntimeStatus } = require('../bot/telegramBot');
 const router = express.Router();
 
 async function timed(name, check) {
@@ -26,6 +27,10 @@ router.get('/health', authenticateToken, async (req, res) => {
       id: bot.id,
       userId: bot.userId,
       allowedCount: bot.allowedIds.length,
+      ...(getTelegramRuntimeStatus().find((runtime) => runtime.id === bot.id) || {
+        status: bot.allowedIds.length ? 'not_started' : 'error',
+        error: bot.allowedIds.length ? 'Ожидается запуск' : 'Не настроены разрешённые Telegram ID',
+      }),
     })),
   });
   const failed = services.some((service) => service.status === 'error');
